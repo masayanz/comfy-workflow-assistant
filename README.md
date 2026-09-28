@@ -11,13 +11,16 @@ ComfyUI初心者から初級・中級ユーザー向けの、ローカルで動�
 - ファイル名・保存先を使ったSD1.5 / SDXL / Fluxの簡易分類
 - 推定できなかったモデル系統の手動修正と保存
 - SD1.5 / SDXL txt2img workflowの生成、JSON保存、ComfyUI実行、生成画像表示
-- SDXL txt2imgのComfyUIキャンバス用Workflow JSON保存（API Promptとは別形式）
+- SD1.5 / SDXL txt2imgのComfyUIキャンバス用Workflow JSON保存（API Promptとは別形式）
 - 1つまでのLoRA選択と適用強度の調整
+- `model_profiles/` で管理するモデル別デフォルト値と対応機能
 - ComfyUIルートフォルダとAPI URLの設定
 
 現在、ComfyUIで実行できるworkflowはSD1.5 / SDXL txt2imgです。LoRAは1つ選んで適用できます。Flux、img2img、upscale、複数LoRA、生成履歴は今後の対応項目です。モデル分類はファイル名と保存先による推定なので、判定が「不明」になることがあります。
 
-Workflow生成時は、ComfyUIキャンバスに読み込んで編集する `.workflow.json` と、ComfyUI APIへ送信する `.api.json` を別々に保存できます。UI Workflow JSONの保存は現在SDXL txt2imgに対応しています。どちらも`generated_workflows/`に保存され、ブラウザにもダウンロードされます。
+Workflow生成時は、ComfyUIキャンバスに読み込んで編集する `.workflow.json` と、ComfyUI APIへ送信する `.api.json` を別々に保存できます。UI Workflow JSONの保存はSD1.5 / SDXL txt2imgに対応しています。どちらも`generated_workflows/`に保存され、ブラウザにもダウンロードされます。
+
+SD1.5とSDXLの解像度・Steps・CFG・Sampler・Schedulerの既定値は `model_profiles/` のJSONで管理します。Flux Profileは分類情報のみで、生成機能は無効です。Checkpointを選ぶとBackendからProfileを読み込み、既定値と対応機能を画面に反映します。
 
 ## 必要環境
 
@@ -39,7 +42,7 @@ ComfyUIは既定で `http://127.0.0.1:8188` に接続します。自動検出さ
 
 ## 使い方
 
-1. 左側でSD1.5またはSDXL Checkpointを選びます。ComfyUI Workflow JSONの保存はSDXL Checkpointで利用できます。
+1. 左側でSD1.5またはSDXL Checkpointを選びます。モデル系統が不明な場合は手動で分類できます。
 2. 生成したい内容を入力し、解像度やSamplerなどを指定します。
 3. 「Workflow生成」でキャンバス用Workflow JSONとAPI Prompt JSONを作成し、構成を確認します。
 4. 「ComfyUI Workflowを保存」または「API Promptを保存」で形式を選んでダウンロードします。サーバー側にも `generated_workflows/` へ保存します。
@@ -65,6 +68,7 @@ Web UIポートと起動時のブラウザ表示も設定できます。ポー�
 - `GET /api/comfy/status`
 - `GET /api/models` / `POST /api/models/scan`
 - `GET /api/loras`
+- `GET /api/model-profiles` / `GET /api/model-profiles/{id}`
 - `GET /api/settings` / `PUT /api/settings`
 - `POST /api/workflow/build`
 - `POST /api/workflow/save`

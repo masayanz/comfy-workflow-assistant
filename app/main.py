@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from app.schemas.workflow import WorkflowBuildRequest
 from app.services.comfy_client import ComfyClient
 from app.services.model_scanner import custom_node_count, find_comfy_root, scan_models
+from app.services.model_profile_service import ModelProfileService
 from app.services.settings import get_settings, save_settings
 from app.services.workflow_builder import build_definition, build_workflow, to_api_prompt, to_ui_workflow
 
@@ -128,12 +129,19 @@ async def scan():
 
 class ModelClassification(BaseModel):
     model: str
-    family: str = Field(pattern="^(sd15|sdxl|flux|unknown)$")
+    family: str = Field(min_length=1, max_length=50)
 
 
 @app.post("/api/models/classify")
 async def classify(payload: ModelClassification):
     model = await resolve_model(payload.model)
+    if payload.family != "unknown":
+        try:
+            ModelProfileService().get_profile(payload.family)
+        except KeyError as exc:
+            raise HTTPException(status_code=422, detail="選択したモデルProfileがありません。") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail="モデルProfileの設定を確認してください。") from exc
     settings = get_settings()
     overrides = dict(settings.get("model_families", {}))
     overrides[model["comfy_name"]] = payload.family
@@ -142,6 +150,26 @@ async def classify(payload: ModelClassification):
     model["family"] = payload.family
     logger.info("モデル分類を更新しました: %s -> %s", model["comfy_name"], payload.family)
     return model
+
+
+@app.get("/api/model-profiles")
+async def model_profiles():
+    try:
+        return [profile.as_response() for profile in ModelProfileService().list_profiles()]
+    except ValueError as exc:
+        logger.exception("モデルProfileを読み込めませんでした")
+        raise HTTPException(status_code=500, detail="モデルProfileの設定を確認してください。") from exc
+
+
+@app.get("/api/model-profiles/{profile_id}")
+async def model_profile(profile_id: str):
+    try:
+        return ModelProfileService().get_profile(profile_id).as_response()
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="モデルProfileが見つかりません。") from exc
+    except ValueError as exc:
+        logger.exception("モデルProfileを読み込めませんでした: %s", profile_id)
+        raise HTTPException(status_code=500, detail="モデルProfileの設定を確認してください。") from exc
 
 
 @app.get("/api/loras")
@@ -172,7 +200,7 @@ async def build(payload: WorkflowBuildRequest):
     try:
         definition = build_definition(payload, model["family"])
         workflow = to_api_prompt(definition)
-        ui_workflow = to_ui_workflow(definition) if model["family"] == "sdxl" else None
+        ui_workflow = to_ui_workflow(definition)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     logger.info("Workflowを生成しました: %s", payload.model)

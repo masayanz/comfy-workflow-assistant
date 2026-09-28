@@ -35,11 +35,20 @@ class WorkflowApiTests(unittest.TestCase):
             self.assertEqual(downloaded.status_code, 200)
             self.assertEqual(downloaded.json()["nodes"][4]["widgets_values"][0], 42)
 
-    def test_ui_workflow_save_rejects_sd15_without_affecting_api_prompt(self):
+    def test_sd15_ui_workflow_save_creates_workflow_file(self):
         model = {"name": "v1-5.safetensors", "comfy_name": "v1-5.safetensors", "type": "checkpoint", "family": "sd15"}
-        with patch("app.main.resolve_model", new=AsyncMock(return_value=model)):
+        with patch("app.main.resolve_model", new=AsyncMock(return_value=model)), patch("app.main.validate_lora", new=AsyncMock()):
             response = TestClient(app).post("/api/workflow/save-ui", json={"model": "v1-5.safetensors", "prompt": "portrait"})
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["filename"].endswith(".workflow.json"))
+
+    def test_sd15_build_returns_both_api_and_ui_workflows(self):
+        model = {"name": "v1-5.safetensors", "comfy_name": "v1-5.safetensors", "type": "checkpoint", "family": "sd15"}
+        with patch("app.main.resolve_model", new=AsyncMock(return_value=model)), patch("app.main.validate_lora", new=AsyncMock()):
+            response = TestClient(app).post("/api/workflow/build", json={"model": "v1-5.safetensors", "prompt": "portrait"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["workflow"]["4"]["inputs"]["width"], 512)
+        self.assertEqual(response.json()["ui_workflow"]["version"], 0.4)
 
     def test_build_endpoint_rejects_non_sdxl_model(self):
         model = {"name": "flux.safetensors", "comfy_name": "flux.safetensors", "type": "checkpoint", "family": "flux"}

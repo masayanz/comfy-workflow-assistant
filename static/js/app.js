@@ -1,4 +1,4 @@
-const state = { models: [], family: 'all', selected: null, lastPayload: null };
+const state = { models: [], profiles: new Map(), family: 'all', selected: null, activeProfile: null, profileRequest: 0, lastPayload: null };
 const $ = (selector) => document.querySelector(selector);
 
 async function api(path, options = {}) {
@@ -34,7 +34,8 @@ function renderModels() {
     <span class="model-icon">◈</span><span class="model-info"><strong title="${escapeHtml(model.name)}">${escapeHtml(model.name)}</strong><small>${formatSize(model.size)} <span class="family-pill ${model.family}">${familyName(model.family)}</span></small></span><span class="radio"></span></button>`).join('');
   list.querySelectorAll('.model-card').forEach((button) => button.addEventListener('click', () => {
     state.selected = items[Number(button.dataset.index)];
-    renderModels(); renderSelected();
+    state.activeProfile = null;
+    renderModels(); renderSelected(); loadModelProfile(state.selected);
   }));
 }
 
@@ -43,31 +44,96 @@ function escapeHtml(value) { return String(value).replace(/[&<>"']/g, (char) => 
 
 function renderSelected() {
   const holder = $('#selected-model');
-  if (!state.selected) { holder.innerHTML = '<span class="model-placeholder">左からCheckpointを選択してください</span>'; $('#model-family-tag').textContent = '未選択'; return; }
-  $('#model-family-tag').textContent = familyName(state.selected.family);
-  if (state.selected.family === 'sd15') {
-    $('#resolution').value = '512,512'; $('#steps').value = 25; $('#cfg').value = 7;
-  } else if (state.selected.family === 'sdxl') {
-    $('#resolution').value = '1024,1024'; $('#steps').value = 28; $('#cfg').value = 6;
+  if (!state.selected) {
+    holder.innerHTML = '<span class="model-placeholder">左からCheckpointを選択してください</span>';
+    $('#model-family-tag').textContent = '未選択';
+    setGenerationEnabled(false);
+    return;
   }
-  $('#custom-size').classList.add('hidden');
-  $('#node-flow').innerHTML = `${$('#lora').value ? '<span>Checkpoint Loader</span><i>↓</i><span>LoRA Loader</span><i>↓</i>' : '<span>Checkpoint Loader</span><i>↓</i>'}<span>Text Encode × 2</span><i>↓</i><span>Empty Latent Image</span><i>↓</i><span>KSampler</span><i>↓</i><span>VAE Decode</span><i>↓</i><span>Save Image</span>`;
-  holder.innerHTML = `<span class="model-icon large">◈</span><div class="selected-model-info"><strong>${escapeHtml(state.selected.name)}</strong><small>${formatSize(state.selected.size)}</small></div><select class="family-select" id="family-select" aria-label="モデル系統">${[['sdxl','SDXL'],['sd15','SD1.5'],['flux','Flux'],['unknown','不明']].map(([value,label]) => `<option value="${value}" ${state.selected.family === value ? 'selected' : ''}>${label}</option>`).join('')}</select>`;
+  $('#model-family-tag').textContent = familyName(state.selected.family);
+  renderNodeFlow();
+  setGenerationEnabled(false);
+  const classificationOptions = [...state.profiles.values()].map((profile) => [profile.id, profile.name]);
+  classificationOptions.push(['unknown', '不明']);
+  holder.innerHTML = `<span class="model-icon large">◈</span><div class="selected-model-info"><strong>${escapeHtml(state.selected.name)}</strong><small>${formatSize(state.selected.size)}</small></div><select class="family-select" id="family-select" aria-label="モデル系統">${classificationOptions.map(([value,label]) => `<option value="${escapeHtml(value)}" ${state.selected.family === value ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('')}</select>`;
   $('#family-select').addEventListener('change', async (event) => {
     try {
       const updated = await api('/api/models/classify', { method: 'POST', body: JSON.stringify({ model: state.selected.comfy_name || state.selected.name, family: event.target.value }) });
       state.selected = updated; state.models = state.models.map((model) => model.path === updated.path ? updated : model); renderModels(); renderSelected();
+      await loadModelProfile(updated);
       showMessage('モデル系統を保存しました。', 'success');
     } catch (error) { showMessage(error.message, 'error'); }
   });
+}
+
+function renderFamilyFilters() {
+  const filters = $('#filters');
+  const entries = [['all', 'すべて'], ...[...state.profiles.values()].map((profile) => [profile.id, familyName(profile.id)]), ['unknown', '不明']];
+  filters.innerHTML = entries.map(([id, label]) => `<button class="filter ${state.family === id ? 'active' : ''}" data-filter="${escapeHtml(id)}">${escapeHtml(label)}</button>`).join('');
+}
+
+function setGenerationEnabled(enabled) {
+  for (const selector of ['#build-button', '#save-ui-button', '#save-api-button', '#run-button']) $(selector).disabled = !enabled;
+}
+
+function renderNodeFlow() {
+  $('#node-flow').innerHTML = `${$('#lora').value ? '<span>Checkpoint Loader</span><i>↓</i><span>LoRA Loader</span><i>↓</i>' : '<span>Checkpoint Loader</span><i>↓</i>'}<span>Text Encode × 2</span><i>↓</i><span>Empty Latent Image</span><i>↓</i><span>KSampler</span><i>↓</i><span>VAE Decode</span><i>↓</i><span>Save Image</span>`;
+}
+
+async function loadModelProfile(model) {
+  const requestId = ++state.profileRequest;
+  state.activeProfile = null;
+  setGenerationEnabled(false);
+  try {
+    const profile = await api(`/api/model-profiles/${encodeURIComponent(model.family)}`);
+    if (requestId !== state.profileRequest || state.selected?.path !== model.path || state.selected?.family !== model.family) return;
+    state.activeProfile = profile;
+    const supported = profile.enabled && profile.capabilities.txt2img;
+    const loraEnabled = supported && profile.capabilities.lora;
+    $('#lora').disabled = !loraEnabled;
+    $('#lora-weight').disabled = !loraEnabled;
+    if (!loraEnabled) $('#lora').value = '';
+    if (supported) {
+      const defaults = profile.defaults;
+      const resolution = `${defaults.width},${defaults.height}`;
+      $('#width').value = defaults.width;
+      $('#height').value = defaults.height;
+      if ([...$('#resolution').options].some((option) => option.value === resolution)) {
+        $('#resolution').value = resolution;
+        $('#custom-size').classList.add('hidden');
+      } else {
+        $('#resolution').value = 'custom';
+        $('#width').value = defaults.width;
+        $('#height').value = defaults.height;
+        $('#custom-size').classList.remove('hidden');
+      }
+      $('#steps').value = defaults.steps;
+      $('#cfg').value = defaults.cfg;
+      if (![...$('#sampler').options].some((option) => option.value === defaults.sampler)) {
+        $('#sampler').add(new Option(defaults.sampler, defaults.sampler));
+      }
+      $('#sampler').value = defaults.sampler;
+    }
+    renderNodeFlow();
+    setGenerationEnabled(supported);
+    if (!supported) showMessage(`${profile.name}のtxt2imgは現在対応していません。対応Profileを選択してください。`, 'info');
+  } catch (error) {
+    if (requestId !== state.profileRequest) return;
+    $('#lora').disabled = true;
+    $('#lora-weight').disabled = true;
+    setGenerationEnabled(false);
+    showMessage(error.message || 'モデルProfileを読み込めませんでした。', 'error');
+  }
 }
 
 async function refresh() {
   $('#scan-button').disabled = true;
   $('#scan-button').textContent = 'スキャン中…';
   try {
-    const [status, models] = await Promise.all([api('/api/status'), api('/api/models')]);
+    const [status, models, profiles] = await Promise.all([api('/api/status'), api('/api/models'), api('/api/model-profiles')]);
     state.models = models;
+    state.profiles = new Map(profiles.map((profile) => [profile.id, profile]));
+    renderFamilyFilters();
     const lora = $('#lora');
     const selectedLora = lora.value;
     lora.innerHTML = '<option value="">使わない</option>' + models.filter((model) => model.type === 'lora').map((model) => `<option value="${escapeHtml(model.comfy_name || model.name)}">${escapeHtml(model.name)}</option>`).join('');
@@ -78,6 +144,7 @@ async function refresh() {
     if (status.settings) { $('#comfy-url').value = status.settings.comfy_url; $('#comfy-path').value = status.settings.comfy_path || ''; $('#web-port').value = status.settings.port || 7865; $('#open-browser').checked = status.settings.open_browser !== false; }
     if (state.selected) state.selected = state.models.find((model) => model.path === state.selected.path) || null;
     renderModels(); renderSelected();
+    if (state.selected) await loadModelProfile(state.selected);
   } catch (error) {
     showMessage(error.message, 'error');
   } finally {
@@ -94,7 +161,8 @@ function getPayload() {
   if ($('#resolution').value === 'custom') { width = Number($('#width').value); height = Number($('#height').value); }
   const seed = $('#seed-mode').value === 'fixed' ? Number($('#seed').value) : Math.floor(Math.random() * 4294967296);
   const payload = { model: state.selected.comfy_name || state.selected.name, prompt, negative_prompt: $('#negative').value, width, height,
-    steps: Number($('#steps').value), cfg: Number($('#cfg').value), sampler: $('#sampler').value, seed,
+    steps: Number($('#steps').value), cfg: Number($('#cfg').value), sampler: $('#sampler').value,
+    scheduler: state.activeProfile?.defaults.scheduler, seed,
     lora: $('#lora').value || null, lora_weight: Number($('#lora-weight').value) };
   if (!Number.isInteger(width) || !Number.isInteger(height) || width < 64 || height < 64 || width > 4096 || height > 4096) throw new Error('解像度は64〜4096の整数で入力してください。');
   return payload;
@@ -163,7 +231,7 @@ $('#run-button').addEventListener('click', () => run());
 $('#regenerate-button').addEventListener('click', () => run(state.lastPayload));
 $('#resolution').addEventListener('change', () => $('#custom-size').classList.toggle('hidden', $('#resolution').value !== 'custom'));
 $('#seed-mode').addEventListener('change', () => { $('#seed').disabled = $('#seed-mode').value !== 'fixed'; });
-$('#lora').addEventListener('change', renderSelected);
+$('#lora').addEventListener('change', renderNodeFlow);
 $('#settings-open').addEventListener('click', () => $('#settings-dialog').showModal());
 $('#settings-form').addEventListener('submit', async (event) => {
   if (event.submitter?.value !== 'save') return;

@@ -17,8 +17,8 @@ class WorkflowBuilderTests(unittest.TestCase):
         self.assertEqual(workflow["5"]["inputs"]["seed"], 123)
         self.assertEqual(workflow["5"]["inputs"]["sampler_name"], "dpmpp_2m")
 
-    def test_unknown_family_is_rejected(self):
-        with self.assertRaisesRegex(ValueError, "SD1.5"):
+    def test_unknown_profile_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "モデルProfile"):
             build_workflow(WorkflowBuildRequest(model="model.safetensors", prompt="x"), "unknown")
 
     def test_sd15_uses_sd15_template_and_recommended_defaults(self):
@@ -83,10 +83,33 @@ class WorkflowBuilderTests(unittest.TestCase):
         self.assertEqual(nodes[2]["inputs"][0]["link"], next(link[0] for link in workflow["links"] if link[1:5] == [8, 1, 2, 0]))
         validate_ui_workflow(workflow)
 
-    def test_ui_workflow_is_limited_to_sdxl_mvp(self):
+    def test_ui_workflow_supports_sd15_with_profile_defaults(self):
         definition = build_definition(WorkflowBuildRequest(model="v1-5.safetensors", prompt="portrait"), "sd15")
-        with self.assertRaisesRegex(ValueError, "現在SDXL"):
-            to_ui_workflow(definition)
+        api_prompt = to_api_prompt(definition)
+        workflow = to_ui_workflow(definition)
+        nodes = {node["id"]: node for node in workflow["nodes"]}
+        self.assertEqual(nodes[4]["widgets_values"], [512, 512, 1])
+        self.assertEqual(nodes[5]["widgets_values"], [api_prompt["5"]["inputs"]["seed"], "fixed", 25, 7.0, "euler", "normal", 1.0])
+        self.assertEqual(api_prompt["5"]["inputs"]["steps"], 25)
+        validate_ui_workflow(workflow)
+
+    def test_profile_defaults_are_used_for_omitted_api_settings(self):
+        workflow = build_workflow(WorkflowBuildRequest(model="v1-5.safetensors", prompt="portrait"), "sd15")
+        self.assertEqual(workflow["4"]["inputs"]["width"], 512)
+        self.assertEqual(workflow["4"]["inputs"]["height"], 512)
+        self.assertEqual(workflow["5"]["inputs"]["steps"], 25)
+        self.assertEqual(workflow["5"]["inputs"]["cfg"], 7.0)
+        self.assertEqual(workflow["5"]["inputs"]["scheduler"], "normal")
+
+    def test_sd15_lora_uses_profile_capability_for_api_and_ui_graphs(self):
+        request = WorkflowBuildRequest(model="v1-5.safetensors", prompt="portrait", lora="style.safetensors", lora_weight=0.65)
+        definition = build_definition(request, "sd15")
+        api_prompt = to_api_prompt(definition)
+        ui_workflow = to_ui_workflow(definition)
+        nodes = {node["id"]: node for node in ui_workflow["nodes"]}
+        self.assertEqual(api_prompt["8"]["inputs"]["strength_clip"], 0.65)
+        self.assertEqual(nodes[8]["widgets_values"], ["style.safetensors", 0.65, 0.65])
+        self.assertEqual(nodes[5]["inputs"][0]["link"], next(link[0] for link in ui_workflow["links"] if link[1:5] == [8, 0, 5, 0]))
 
 
 if __name__ == "__main__":

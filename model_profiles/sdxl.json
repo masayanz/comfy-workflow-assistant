@@ -1,0 +1,20 @@
+{
+  "id": "sdxl",
+  "name": "Stable Diffusion XL",
+  "enabled": true,
+  "default_width": 1024,
+  "default_height": 1024,
+  "default_steps": 28,
+  "default_cfg": 6.0,
+  "default_sampler": "euler",
+  "default_scheduler": "normal",
+  "supported_generation_types": ["txt2img"],
+  "supports_lora": true,
+  "capabilities": {
+    "txt2img": true,
+    "img2img": false,
+    "lora": true,
+    "controlnet": false,
+    "upscale": false
+  }
+}

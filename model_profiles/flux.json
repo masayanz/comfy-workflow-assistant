@@ -1,0 +1,20 @@
+{
+  "id": "flux",
+  "name": "Flux",
+  "enabled": false,
+  "default_width": null,
+  "default_height": null,
+  "default_steps": null,
+  "default_cfg": null,
+  "default_sampler": null,
+  "default_scheduler": null,
+  "supported_generation_types": [],
+  "supports_lora": false,
+  "capabilities": {
+    "txt2img": false,
+    "img2img": false,
+    "lora": false,
+    "controlnet": false,
+    "upscale": false
+  }
+}

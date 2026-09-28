@@ -1,0 +1,20 @@
+{
+  "id": "sd15",
+  "name": "Stable Diffusion 1.5",
+  "enabled": true,
+  "default_width": 512,
+  "default_height": 512,
+  "default_steps": 25,
+  "default_cfg": 7.0,
+  "default_sampler": "euler",
+  "default_scheduler": "normal",
+  "supported_generation_types": ["txt2img"],
+  "supports_lora": true,
+  "capabilities": {
+    "txt2img": true,
+    "img2img": false,
+    "lora": true,
+    "controlnet": false,
+    "upscale": false
+  }
+}

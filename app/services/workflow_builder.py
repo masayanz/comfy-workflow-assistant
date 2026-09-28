@@ -4,6 +4,7 @@ from pathlib import Path
 import secrets
 
 from app.schemas.workflow import WorkflowBuildRequest
+from app.services.model_profile_service import ModelProfile, ModelProfileService
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -53,21 +54,29 @@ UI_NODE_SPECS = {
 
 
 def build_definition(request: WorkflowBuildRequest, family: str = "sdxl") -> WorkflowDefinition:
-    if family not in {"sd15", "sdxl"}:
-        raise ValueError("txt2imgはSD1.5またはSDXL Checkpointを選択してください。")
+    try:
+        profile = ModelProfileService().get_profile(family)
+    except (KeyError, ValueError) as exc:
+        raise ValueError(f"モデルProfileが見つからないか不正です: {family}") from exc
+    if not profile.enabled or not profile.capabilities.txt2img:
+        raise ValueError(f"{profile.name}のtxt2imgは現在対応していません。")
+    if request.lora and not profile.capabilities.lora:
+        raise ValueError(f"{profile.name}はLoRAに対応していません。")
+
+    settings = resolve_generation_settings(request, profile)
 
     nodes = [
         WorkflowNodeDefinition(1, "CheckpointLoaderSimple", {"ckpt_name": request.model}),
         WorkflowNodeDefinition(2, "CLIPTextEncode", {"text": request.prompt, "clip": Connection(1, 1)}),
         WorkflowNodeDefinition(3, "CLIPTextEncode", {"text": request.negative_prompt, "clip": Connection(1, 1)}),
-        WorkflowNodeDefinition(4, "EmptyLatentImage", {"width": request.width, "height": request.height, "batch_size": 1}),
+        WorkflowNodeDefinition(4, "EmptyLatentImage", {"width": settings["width"], "height": settings["height"], "batch_size": 1}),
         WorkflowNodeDefinition(5, "KSampler", {
             "seed": request.seed if request.seed is not None else secrets.randbelow(2**32),
             "seed_control": "fixed",
-            "steps": request.steps,
-            "cfg": request.cfg,
-            "sampler_name": request.sampler,
-            "scheduler": "normal",
+            "steps": settings["steps"],
+            "cfg": settings["cfg"],
+            "sampler_name": settings["sampler"],
+            "scheduler": settings["scheduler"],
             "denoise": 1.0,
             "model": Connection(1, 0),
             "positive": Connection(2, 0),
@@ -95,6 +104,18 @@ def build_definition(request: WorkflowBuildRequest, family: str = "sdxl") -> Wor
     return definition
 
 
+def resolve_generation_settings(request: WorkflowBuildRequest, profile: ModelProfile) -> dict:
+    """Fill omitted request values from the selected model profile."""
+    return {
+        "width": request.width if request.width is not None else profile.default_width,
+        "height": request.height if request.height is not None else profile.default_height,
+        "steps": request.steps if request.steps is not None else profile.default_steps,
+        "cfg": request.cfg if request.cfg is not None else profile.default_cfg,
+        "sampler": request.sampler or profile.default_sampler,
+        "scheduler": request.scheduler or profile.default_scheduler,
+    }
+
+
 def to_api_prompt(definition: WorkflowDefinition) -> dict:
     prompt = {}
     for node in definition.nodes:
@@ -111,8 +132,12 @@ def to_api_prompt(definition: WorkflowDefinition) -> dict:
 
 
 def to_ui_workflow(definition: WorkflowDefinition) -> dict:
-    if definition.family != "sdxl":
-        raise ValueError("ComfyUIキャンバス用Workflow JSONの作成は現在SDXL txt2imgに対応しています。")
+    try:
+        profile = ModelProfileService().get_profile(definition.family)
+    except (KeyError, ValueError) as exc:
+        raise ValueError(f"モデルProfileが見つからないか不正です: {definition.family}") from exc
+    if not profile.enabled or not profile.capabilities.txt2img:
+        raise ValueError(f"{profile.name}のComfyUI Workflow JSONには現在対応していません。")
 
     links = []
     next_link_id = 1
