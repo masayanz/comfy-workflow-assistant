@@ -1,7 +1,7 @@
 import unittest
 
 from app.schemas.workflow import WorkflowBuildRequest
-from app.services.workflow_builder import build_definition, build_workflow, to_api_prompt, to_ui_workflow, validate_workflow, validate_ui_workflow
+from app.services.workflow_builder import Connection, build_definition, build_workflow, to_api_prompt, to_ui_workflow, validate_definition, validate_workflow, validate_ui_workflow
 
 
 class WorkflowBuilderTests(unittest.TestCase):
@@ -110,6 +110,104 @@ class WorkflowBuilderTests(unittest.TestCase):
         self.assertEqual(api_prompt["8"]["inputs"]["strength_clip"], 0.65)
         self.assertEqual(nodes[8]["widgets_values"], ["style.safetensors", 0.65, 0.65])
         self.assertEqual(nodes[5]["inputs"][0]["link"], next(link[0] for link in ui_workflow["links"] if link[1:5] == [8, 0, 5, 0]))
+
+    def test_flux_split_model_api_and_ui_workflows_share_settings_and_connections(self):
+        request = WorkflowBuildRequest(
+            profile_id="flux", diffusion_model="flux1-dev.safetensors", clip_name1="clip_l.safetensors",
+            clip_name2="t5xxl_fp8.safetensors", vae_model="ae.safetensors", prompt="a mountain lake",
+            width=1024, height=768, steps=20, cfg=1, guidance=3.5, sampler="euler", scheduler="simple", seed=1234,
+        )
+        definition = build_definition(request, "flux")
+        api_prompt = to_api_prompt(definition)
+        ui_workflow = to_ui_workflow(definition)
+        nodes = {node["id"]: node for node in ui_workflow["nodes"]}
+
+        self.assertEqual(api_prompt["1"]["class_type"], "UNETLoader")
+        self.assertEqual(api_prompt["1"]["inputs"]["unet_name"], "flux1-dev.safetensors")
+        self.assertEqual(api_prompt["2"]["inputs"]["clip_name1"], "clip_l.safetensors")
+        self.assertEqual(api_prompt["2"]["inputs"]["clip_name2"], "t5xxl_fp8.safetensors")
+        self.assertEqual(api_prompt["2"]["inputs"]["type"], "flux")
+        self.assertEqual(api_prompt["5"]["inputs"]["guidance"], 3.5)
+        self.assertEqual(api_prompt["6"]["inputs"], {"width": 1024, "height": 768, "batch_size": 1})
+        self.assertEqual(api_prompt["7"]["inputs"]["seed"], 1234)
+        self.assertEqual(api_prompt["7"]["inputs"]["scheduler"], "simple")
+        self.assertEqual(nodes[1]["widgets_values"], ["flux1-dev.safetensors", "default"])
+        self.assertEqual(nodes[2]["widgets_values"], ["clip_l.safetensors", "t5xxl_fp8.safetensors", "flux", "default"])
+        self.assertEqual(nodes[4]["widgets_values"], ["a mountain lake"])
+        self.assertEqual(nodes[6]["widgets_values"], [1024, 768, 1])
+        self.assertEqual(nodes[7]["widgets_values"], [1234, "fixed", 20, 1.0, "euler", "simple", 1.0])
+        self.assertEqual(api_prompt["7"]["inputs"]["model"], ["1", 0])
+        self.assertEqual(api_prompt["8"]["inputs"]["vae"], ["3", 0])
+        validate_ui_workflow(ui_workflow)
+
+    def test_flux_rejects_dimensions_outside_empty_sd3_latent_multiple(self):
+        with self.assertRaisesRegex(ValueError, "16の倍数"):
+            build_definition(WorkflowBuildRequest(profile_id="flux", prompt="x", width=1000, height=1024), "flux")
+
+    def test_sdxl_img2img_api_and_ui_workflows_use_input_image_and_denoise(self):
+        request = WorkflowBuildRequest(
+            model="portrait.safetensors", generation_type="img2img", input_image_id="upload-id",
+            prompt="soft watercolor", negative_prompt="blurry", steps=20, cfg=6.0,
+            sampler="euler", scheduler="normal", seed=987, denoise=0.5,
+        )
+        definition = build_definition(request, "sdxl", "cwa_test.png")
+        api_prompt = to_api_prompt(definition)
+        ui = to_ui_workflow(definition)
+        nodes = {node["id"]: node for node in ui["nodes"]}
+        self.assertEqual(definition.generation_type, "img2img")
+        self.assertEqual(definition.input_image, "cwa_test.png")
+        self.assertEqual(api_prompt["4"]["class_type"], "LoadImage")
+        self.assertEqual(api_prompt["4"]["inputs"]["image"], "cwa_test.png")
+        self.assertEqual(api_prompt["5"]["class_type"], "VAEEncode")
+        self.assertEqual(api_prompt["5"]["inputs"]["pixels"], ["4", 0])
+        self.assertEqual(api_prompt["5"]["inputs"]["vae"], ["1", 2])
+        self.assertEqual(api_prompt["6"]["inputs"]["latent_image"], ["5", 0])
+        self.assertEqual(api_prompt["6"]["inputs"]["denoise"], 0.5)
+        self.assertEqual(api_prompt["2"]["inputs"]["text"], "soft watercolor")
+        self.assertEqual(api_prompt["3"]["inputs"]["text"], "blurry")
+        self.assertEqual(api_prompt["6"]["inputs"]["seed"], 987)
+        self.assertEqual(nodes[4]["widgets_values"], ["cwa_test.png", "image"])
+        self.assertEqual(nodes[6]["widgets_values"], [987, "fixed", 20, 6.0, "euler", "normal", 0.5])
+        self.assertEqual({node["id"] for node in ui["nodes"]}, set(range(1, 9)))
+        validate_ui_workflow(ui)
+
+    def test_sdxl_lora_img2img_routes_checkpoint_model_and_clip_through_lora(self):
+        request = WorkflowBuildRequest(
+            model="portrait.safetensors", generation_type="img2img", prompt="portrait",
+            lora="style.safetensors", lora_weight=0.7, denoise=0.8,
+        )
+        api = build_workflow(request, "sdxl", "cwa_test.png")
+        self.assertEqual(api["9"]["class_type"], "LoraLoader")
+        self.assertEqual(api["2"]["inputs"]["clip"], ["9", 1])
+        self.assertEqual(api["3"]["inputs"]["clip"], ["9", 1])
+        self.assertEqual(api["6"]["inputs"]["model"], ["9", 0])
+        self.assertEqual(api["6"]["inputs"]["denoise"], 0.8)
+        ui = to_ui_workflow(build_definition(request, "sdxl", "cwa_test.png"))
+        self.assertEqual({node["id"] for node in ui["nodes"]}, set(range(1, 10)))
+        validate_ui_workflow(ui)
+
+    def test_img2img_requires_a_valid_image_and_supported_profile(self):
+        with self.assertRaisesRegex(ValueError, "入力画像が必要"):
+            build_definition(WorkflowBuildRequest(model="portrait.safetensors", generation_type="img2img", prompt="x"), "sdxl")
+        with self.assertRaisesRegex(ValueError, "img2imgは現在対応していません"):
+            build_definition(WorkflowBuildRequest(model="v1-5.safetensors", generation_type="img2img", prompt="x"), "sd15")
+
+    def test_img2img_definition_rejects_wrong_socket_types_and_ui_link_types(self):
+        definition = build_definition(
+            WorkflowBuildRequest(model="portrait.safetensors", generation_type="img2img", prompt="x"),
+            "sdxl", "cwa_test.png",
+        )
+        definition.nodes[5].inputs["latent_image"] = Connection(1, 2)
+        with self.assertRaises(ValueError):
+            validate_definition(definition)
+
+        ui = to_ui_workflow(build_definition(
+            WorkflowBuildRequest(model="portrait.safetensors", generation_type="img2img", prompt="x"),
+            "sdxl", "cwa_test.png",
+        ))
+        ui["links"][0][5] = "LATENT"
+        with self.assertRaises(ValueError):
+            validate_ui_workflow(ui)
 
 
 if __name__ == "__main__":

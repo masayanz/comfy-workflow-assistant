@@ -19,6 +19,35 @@ class ModelCapabilities(BaseModel):
     upscale: bool = False
 
 
+class ModelComponentInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str = Field(pattern=r"^(diffusion_model|clip_name1|clip_name2|vae_model)$")
+    label: str = Field(min_length=1, max_length=100)
+    asset_type: str = Field(pattern=r"^(diffusion_model|text_encoder|vae)$")
+    family: str = Field(min_length=1, max_length=50)
+    required: bool = True
+    name_pattern: str | None = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def validate_name_pattern(self):
+        if self.name_pattern:
+            try:
+                re.compile(self.name_pattern)
+            except re.error as exc:
+                raise ValueError("model componentのname_patternが不正です") from exc
+        return self
+
+
+class ModelProfileUI(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    show_cfg: bool = True
+    show_negative_prompt: bool = True
+    show_guidance: bool = False
+    model_components: list[ModelComponentInput] = Field(default_factory=list)
+
+
 class ModelProfile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -34,6 +63,10 @@ class ModelProfile(BaseModel):
     supported_generation_types: list[str] = Field(default_factory=list)
     supports_lora: bool
     capabilities: ModelCapabilities
+    architecture: str = "checkpoint"
+    default_guidance: float | None = Field(default=None, ge=0, le=100)
+    resolution_multiple: int = Field(default=1, ge=1, le=128)
+    ui: ModelProfileUI = Field(default_factory=ModelProfileUI)
 
     @model_validator(mode="after")
     def validate_capabilities(self):
@@ -48,6 +81,17 @@ class ModelProfile(BaseModel):
             raise ValueError("img2img capabilityとsupported_generation_typesが一致しません")
         if self.capabilities.lora != self.supports_lora:
             raise ValueError("lora capabilityとsupports_loraが一致しません")
+        if self.architecture not in {"checkpoint", "flux_split"}:
+            raise ValueError("architectureに未対応の値があります")
+        if self.architecture == "flux_split" and self.capabilities.txt2img and self.default_guidance is None:
+            raise ValueError("Flux Profileにはdefault_guidanceが必要です")
+        if len({component.key for component in self.ui.model_components}) != len(self.ui.model_components):
+            raise ValueError("ui.model_componentsのkeyが重複しています")
+        if self.architecture == "flux_split" and self.capabilities.txt2img:
+            required_roles = {"diffusion_model", "clip_name1", "clip_name2", "vae_model"}
+            configured_roles = {component.key for component in self.ui.model_components if component.required}
+            if configured_roles != required_roles:
+                raise ValueError("Flux Profileには必須モデル構成4種が必要です")
         defaults = (self.default_width, self.default_height, self.default_steps, self.default_cfg, self.default_sampler, self.default_scheduler)
         if self.enabled and (not self.supported_generation_types or any(value is None for value in defaults)):
             raise ValueError("有効なProfileには対応生成タイプと全デフォルト値が必要です")
@@ -71,6 +115,10 @@ class ModelProfile(BaseModel):
             "supported_generation_types": list(self.supported_generation_types),
             "supports_lora": self.supports_lora,
             "capabilities": self.capabilities.model_dump(),
+            "architecture": self.architecture,
+            "default_guidance": self.default_guidance,
+            "resolution_multiple": self.resolution_multiple,
+            "ui": self.ui.model_dump(),
         }
 
 

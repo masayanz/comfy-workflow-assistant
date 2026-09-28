@@ -4,7 +4,7 @@ from pathlib import Path
 def classify_model(name: str, path: str | Path = "") -> str:
     """Return a conservative model family guess based on file and folder names."""
     haystack = f"{name} {path}".lower().replace("_", " ").replace("-", " ")
-    if any(token in haystack for token in ("flux", " schnell", "dev model", "flux1")):
+    if any(token in haystack for token in ("flux", " schnell", "dev model", "flux1", "clip l", "t5xxl")) or "ae.safetensors" in name.lower():
         return "flux"
     if any(token in haystack for token in ("sdxl", " xl ", "xl base", "juggernautxl", "ponydiffusion", "v6xl")):
         return "sdxl"

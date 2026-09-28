@@ -8,11 +8,11 @@
   "default_cfg": 6.0,
   "default_sampler": "euler",
   "default_scheduler": "normal",
-  "supported_generation_types": ["txt2img"],
+  "supported_generation_types": ["txt2img", "img2img"],
   "supports_lora": true,
   "capabilities": {
     "txt2img": true,
-    "img2img": false,
+    "img2img": true,
     "lora": true,
     "controlnet": false,
     "upscale": false

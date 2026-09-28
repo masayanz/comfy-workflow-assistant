@@ -3,6 +3,8 @@ from pathlib import Path
 
 MODEL_DIRS = {
     "checkpoint": "checkpoints",
+    "diffusion_model": "diffusion_models",
+    "text_encoder": "text_encoders",
     "lora": "loras",
     "vae": "vae",
     "controlnet": "controlnet",

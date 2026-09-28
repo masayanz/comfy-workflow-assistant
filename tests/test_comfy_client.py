@@ -41,6 +41,25 @@ class ComfyClientTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(RuntimeError, "受け付けませんでした"):
                 await ComfyClient("http://localhost:8188").queue({"1": {}})
 
+    async def test_upload_image_posts_unique_file_to_comfy_input_subfolder(self):
+        def handler(request):
+            self.assertEqual(request.url.path, "/upload/image")
+            self.assertIn(b"name=\"type\"", request.content)
+            self.assertIn(b"input", request.content)
+            self.assertIn(b'name="subfolder"', request.content)
+            self.assertIn(b"cwa_123.png", request.content)
+            return httpx.Response(200, json={"name": "cwa_123.png", "subfolder": "", "type": "input"})
+        transport = httpx.MockTransport(handler)
+        original = httpx.AsyncClient
+
+        def client_factory(*args, **kwargs):
+            return original(*args, **{**kwargs, "transport": transport})
+
+        with patch("app.services.comfy_client.httpx.AsyncClient", side_effect=client_factory):
+            result = await ComfyClient("http://localhost:8188").upload_image("cwa_123.png", b"png-data", "image/png", "")
+        self.assertEqual(result["type"], "input")
+        self.assertEqual(result["name"], "cwa_123.png")
+
     async def test_prompt_status_extracts_completed_image_metadata(self):
         def handler(request):
             if request.url.path.endswith("/history/abc"):
@@ -81,9 +100,16 @@ class ComfyClientTests(unittest.IsolatedAsyncioTestCase):
     async def test_available_models_uses_comfy_object_info(self):
         def handler(request):
             node = request.url.path.rsplit("/", 1)[-1]
-            input_name = {"CheckpointLoaderSimple": "ckpt_name", "LoraLoader": "lora_name", "VAELoader": "vae_name", "ControlNetLoader": "control_net_name", "UpscaleModelLoader": "model_name"}[node]
-            values = ["portrait.safetensors"] if node == "CheckpointLoaderSimple" else []
-            return httpx.Response(200, json={node: {"input": {"required": {input_name: [values, {}]}}}})
+            fields = {
+                "CheckpointLoaderSimple": ("ckpt_name",), "UNETLoader": ("unet_name",),
+                "DualCLIPLoader": ("clip_name1", "clip_name2"), "LoraLoader": ("lora_name",),
+                "VAELoader": ("vae_name",), "ControlNetLoader": ("control_net_name",),
+                "UpscaleModelLoader": ("model_name",),
+            }[node]
+            values = {"ckpt_name": ["portrait.safetensors"], "unet_name": ["flux1-dev.safetensors"],
+                      "clip_name1": ["clip_l.safetensors"], "clip_name2": ["t5xxl_fp8.safetensors"]}
+            required = {name: [values.get(name, []), {}] for name in fields}
+            return httpx.Response(200, json={node: {"input": {"required": required}}})
         transport = httpx.MockTransport(handler)
         original = httpx.AsyncClient
 
@@ -94,6 +120,8 @@ class ComfyClientTests(unittest.IsolatedAsyncioTestCase):
             result = await ComfyClient("http://localhost:8188").available_models()
         self.assertEqual(result[0]["comfy_name"], "portrait.safetensors")
         self.assertEqual(result[0]["source"], "comfy_api")
+        self.assertTrue(any(item["type"] == "diffusion_model" and item["family"] == "flux" for item in result))
+        self.assertEqual({item["comfy_name"] for item in result if item["type"] == "text_encoder"}, {"clip_l.safetensors", "t5xxl_fp8.safetensors"})
 
 
 if __name__ == "__main__":

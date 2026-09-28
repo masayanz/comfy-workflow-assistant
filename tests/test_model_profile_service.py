@@ -14,8 +14,12 @@ class ModelProfileServiceTests(unittest.TestCase):
         self.assertEqual((profiles["sd15"].default_steps, profiles["sd15"].default_cfg), (25, 7.0))
         self.assertEqual((profiles["sdxl"].default_width, profiles["sdxl"].default_height), (1024, 1024))
         self.assertEqual((profiles["sdxl"].default_steps, profiles["sdxl"].default_cfg), (28, 6.0))
-        self.assertFalse(profiles["flux"].enabled)
-        self.assertIsNone(profiles["flux"].default_width)
+        self.assertTrue(profiles["flux"].enabled)
+        self.assertEqual((profiles["flux"].default_width, profiles["flux"].default_height), (1024, 1024))
+        self.assertEqual((profiles["flux"].default_steps, profiles["flux"].default_cfg), (20, 1.0))
+        self.assertEqual(profiles["flux"].default_guidance, 3.5)
+        self.assertFalse(profiles["flux"].ui.show_negative_prompt)
+        self.assertEqual([component.key for component in profiles["flux"].ui.model_components], ["diffusion_model", "clip_name1", "clip_name2", "vae_model"])
 
     def test_lookup_returns_profile_and_unknown_profile_is_rejected(self):
         service = ModelProfileService()

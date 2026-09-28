@@ -44,26 +44,45 @@ class ComfyClient:
             response.raise_for_status()
             return response.json().get(node_name, {})
 
+    async def upload_image(self, filename: str, content: bytes, content_type: str, subfolder: str) -> dict:
+        """Upload a validated image to ComfyUI's input folder for LoadImage."""
+        async with httpx.AsyncClient(timeout=max(self.timeout, 60)) as client:
+            response = await client.post(
+                urljoin(self.base_url, "upload/image"),
+                data={"type": "input", "subfolder": subfolder, "overwrite": "false"},
+                files={"image": (filename, content, content_type)},
+            )
+            response.raise_for_status()
+            body = response.json()
+        if not isinstance(body, dict) or not isinstance(body.get("name"), str):
+            raise RuntimeError("ComfyUIからアップロード画像名が返されませんでした。")
+        return body
+
     async def available_models(self) -> list[dict]:
         model_nodes = {
-            "CheckpointLoaderSimple": ("checkpoint", "ckpt_name"),
-            "LoraLoader": ("lora", "lora_name"),
-            "VAELoader": ("vae", "vae_name"),
-            "ControlNetLoader": ("controlnet", "control_net_name"),
-            "UpscaleModelLoader": ("upscale_model", "model_name"),
+            "CheckpointLoaderSimple": ("checkpoint", ("ckpt_name",)),
+            "UNETLoader": ("diffusion_model", ("unet_name",)),
+            "DualCLIPLoader": ("text_encoder", ("clip_name1", "clip_name2")),
+            "LoraLoader": ("lora", ("lora_name",)),
+            "VAELoader": ("vae", ("vae_name",)),
+            "ControlNetLoader": ("controlnet", ("control_net_name",)),
+            "UpscaleModelLoader": ("upscale_model", ("model_name",)),
         }
         node_data = await asyncio.gather(*(self.object_info(name) for name in model_nodes), return_exceptions=True)
         result = []
         from app.services.model_classifier import classify_model
 
-        for (node_name, (kind, input_name)), data in zip(model_nodes.items(), node_data):
+        for (node_name, (kind, input_names)), data in zip(model_nodes.items(), node_data):
             if isinstance(data, Exception):
                 logger.warning("Could not read ComfyUI node info for %s: %s", node_name, data)
                 continue
-            choices = data.get("input", {}).get("required", {}).get(input_name, [[]])[0]
-            if not isinstance(choices, list):
-                continue
-            for name in choices:
+            inputs = data.get("input", {}).get("required", {})
+            names = set()
+            for input_name in input_names:
+                choices = inputs.get(input_name, [[]])[0]
+                if isinstance(choices, list):
+                    names.update(name for name in choices if isinstance(name, str))
+            for name in sorted(names):
                 if not isinstance(name, str):
                     continue
                 result.append({
