@@ -1,2 +1,91 @@
-# comfy-workflow-assistant
-ComfyUIワークフロー自動作成ツール
+# Comfy Workflow Builder
+
+ComfyUI初心者から初級・中級ユーザー向けの、ローカルで動作するワークフロー作成ツールです。モデルと生成条件を選び、ComfyUI API形式での直接実行と、キャンバスで編集できるWorkflow JSONの保存ができます。
+
+## MVPの対応範囲
+
+- Windows 11を想定した起動スクリプト
+- ComfyUI APIの接続状態表示
+- Checkpoint、LoRA、VAE、ControlNet、upscale modelのローカルスキャン
+- ComfyUIのファイルシステムにアクセスできない場合は `/object_info` から利用可能モデル一覧を取得
+- ファイル名・保存先を使ったSD1.5 / SDXL / Fluxの簡易分類
+- 推定できなかったモデル系統の手動修正と保存
+- SD1.5 / SDXL txt2img workflowの生成、JSON保存、ComfyUI実行、生成画像表示
+- SDXL txt2imgのComfyUIキャンバス用Workflow JSON保存（API Promptとは別形式）
+- 1つまでのLoRA選択と適用強度の調整
+- ComfyUIルートフォルダとAPI URLの設定
+
+現在、ComfyUIで実行できるworkflowはSD1.5 / SDXL txt2imgです。LoRAは1つ選んで適用できます。Flux、img2img、upscale、複数LoRA、生成履歴は今後の対応項目です。モデル分類はファイル名と保存先による推定なので、判定が「不明」になることがあります。
+
+Workflow生成時は、ComfyUIキャンバスに読み込んで編集する `.workflow.json` と、ComfyUI APIへ送信する `.api.json` を別々に保存できます。UI Workflow JSONの保存は現在SDXL txt2imgに対応しています。どちらも`generated_workflows/`に保存され、ブラウザにもダウンロードされます。
+
+## 必要環境
+
+- Windows 11
+- Python 3.12以上（Python Launcherの `py` コマンドが利用可能）
+- インストール済みのComfyUIと、利用するSD1.5またはSDXL Checkpoint
+
+## 起動
+
+リポジトリのルートでPowerShellを開き、次を実行します。
+
+```powershell
+.\start.ps1
+```
+
+初回起動時に `.venv` を作成し、`requirements.txt` の依存関係をインストールして、`http://127.0.0.1:7865` でWeb UIを起動します。サーバーはlocalhostのみにbindします。
+
+ComfyUIは既定で `http://127.0.0.1:8188` に接続します。自動検出されない場合は画面右上の設定からComfyUI API URLと、`models` フォルダを含むComfyUIルートフォルダを指定してください。Stability Matrix環境でもComfyUIパッケージのルートを指定できます。
+
+## 使い方
+
+1. 左側でSD1.5またはSDXL Checkpointを選びます。ComfyUI Workflow JSONの保存はSDXL Checkpointで利用できます。
+2. 生成したい内容を入力し、解像度やSamplerなどを指定します。
+3. 「Workflow生成」でキャンバス用Workflow JSONとAPI Prompt JSONを作成し、構成を確認します。
+4. 「ComfyUI Workflowを保存」または「API Promptを保存」で形式を選んでダウンロードします。サーバー側にも `generated_workflows/` へ保存します。
+5. キャンバスで編集する場合は、保存した`.workflow.json`をComfyUIのLoadから開きます。アプリから直接生成する場合は「ComfyUIで生成」をクリックします。完了すると生成画像と設定が画面に表示されます。
+
+ComfyUI側にSDXL用の標準ノード（CheckpointLoaderSimple、CLIPTextEncode、EmptyLatentImage、KSampler、VAEDecode、SaveImage）が必要です。独自ノードを使うworkflowは現在対象外です。
+
+`.api.json`はComfyUI APIへ送るPrompt形式、`.workflow.json`はComfyUIのグラフ画面で読み込んで編集する形式です。2種類のJSONはWorkflowDefinitionから別々に生成します。
+
+## 設定とログ
+
+- 設定ファイル: `data/settings.json`（初回保存時に作成）
+- ログ: `logs/app.log`
+- 保存workflow: `generated_workflows/`
+
+Web UIポートと起動時のブラウザ表示も設定できます。ポート変更は設定保存後にアプリを再起動すると反映されます。
+
+これらのローカル生成ファイルはGit管理対象外です。
+
+## API
+
+- `GET /api/status`
+- `GET /api/comfy/status`
+- `GET /api/models` / `POST /api/models/scan`
+- `GET /api/loras`
+- `GET /api/settings` / `PUT /api/settings`
+- `POST /api/workflow/build`
+- `POST /api/workflow/save`
+- `POST /api/workflow/save-ui`
+- `POST /api/workflow/run`
+
+## 開発
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python -m uvicorn app.main:app --host 127.0.0.1 --port 7865
+```
+
+テストは `python -m unittest discover -s tests -v` で実行できます。
+
+## Contributing
+
+不具合報告や改善提案、Pull Requestを歓迎します。再現手順、ComfyUIのバージョン、必要なモデルやノードを添えてください。モデルファイルや個人環境の設定をPull Requestへ含めないでください。
+
+## License
+
+MIT License。詳細は [LICENSE](LICENSE) を参照してください。

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Comfy Workflow Builder</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">C</span><div><strong>Comfy Workflow Builder</strong><small>ComfyUI workflow assistant</small></div></div>
+    <div class="connection"><span class="status-dot" id="status-dot"></span><span id="status-label">接続を確認中</span><button class="icon-button" id="settings-open" aria-label="設定">⚙</button></div>
+  </header>
+  <main class="layout">
+    <aside class="panel model-panel">
+      <div class="section-heading"><div><p class="eyebrow">STEP 01</p><h2>モデルを選択</h2></div><button class="text-button" id="scan-button">↻ 再スキャン</button></div>
+      <label class="search"><span>⌕</span><input id="model-search" type="search" placeholder="モデルを検索"></label>
+      <div class="filters" id="filters"><button class="filter active" data-filter="all">すべて</button><button class="filter" data-filter="sdxl">SDXL</button><button class="filter" data-filter="sd15">SD1.5</button><button class="filter" data-filter="flux">Flux</button><button class="filter" data-filter="unknown">不明</button></div>
+      <div id="model-list" class="model-list"><div class="empty-state">ComfyUI環境を確認しています…</div></div>
+      <div class="panel-foot"><span id="model-count">0モデル</span><span id="root-label">ComfyUI未設定</span></div>
+    </aside>
+
+    <section class="panel builder-panel">
+      <div class="section-heading"><div><p class="eyebrow">STEP 02</p><h2>ワークフローを作成</h2></div><span class="mode-tag">TXT2IMG</span></div>
+      <label class="field-label" for="prompt">作りたいもの <span class="required">必須</span></label>
+      <textarea id="prompt" rows="4" placeholder="例：自然な日本人女性のポートレート、柔らかな自然光"></textarea>
+      <details class="advanced" open><summary>生成設定</summary>
+        <div class="field-grid resolution-grid"><label class="field-label">解像度<select id="resolution"><option value="512,512">512 × 512</option><option value="768,768">768 × 768</option><option value="1024,1024" selected>1024 × 1024</option><option value="832,1216">832 × 1216</option><option value="1024,1536">1024 × 1536</option><option value="custom">カスタム</option></select></label><div id="custom-size" class="custom-size hidden"><label>幅<input id="width" type="number" value="1024" min="64" max="4096" step="64"></label><label>高さ<input id="height" type="number" value="1024" min="64" max="4096" step="64"></label></div></div>
+        <div class="field-grid three"><label class="field-label">Steps<input id="steps" type="number" min="1" max="150" value="28"></label><label class="field-label">CFG<input id="cfg" type="number" min="0" max="50" step="0.5" value="6"></label><label class="field-label">Sampler<select id="sampler"><option>euler</option><option>dpmpp_2m</option><option>dpmpp_2m_sde</option><option>euler_ancestral</option><option>uni_pc</option></select></label></div>
+        <div class="seed-row"><label class="field-label" for="seed-mode">Seed</label><select id="seed-mode"><option value="random">毎回ランダム</option><option value="fixed">固定値</option></select><input id="seed" type="number" value="1" min="0" max="4294967295" disabled></div>
+        <label class="field-label" for="negative">Negative Prompt <span class="optional">任意</span></label><textarea id="negative" rows="2" placeholder="避けたい要素を入力"></textarea>
+      </details>
+      <details class="lora-options"><summary>LoRAを使う <span class="optional">任意</span></summary><div class="field-grid two"><label class="field-label">LoRA<select id="lora"><option value="">使わない</option></select></label><label class="field-label">Weight<input id="lora-weight" type="number" min="-2" max="2" step="0.05" value="0.8"></label></div></details>
+      <div class="actions"><button id="build-button" class="button secondary">Workflow生成</button><button id="save-ui-button" class="button primary">ComfyUI Workflowを保存</button><button id="save-api-button" class="button secondary">API Promptを保存</button><button id="run-button" class="button primary">▶ ComfyUIで生成</button></div>
+      <div id="message" class="message hidden" role="status"></div>
+    </section>
+
+    <aside class="panel preview-panel">
+      <div class="section-heading"><div><p class="eyebrow">PREVIEW</p><h2>生成予定</h2></div></div>
+      <div class="selected-model" id="selected-model"><span class="model-placeholder">左からCheckpointを選択してください</span></div>
+      <div class="workflow-card"><div class="workflow-title"><span>構成</span><span class="tiny-tag" id="model-family-tag">SDXL</span></div><div class="node-flow" id="node-flow"><span>Checkpoint Loader</span><i>↓</i><span>Text Encode × 2</span><i>↓</i><span>Empty Latent Image</span><i>↓</i><span>KSampler</span><i>↓</i><span>VAE Decode</span><i>↓</i><span>Save Image</span></div></div>
+      <details class="json-preview hidden" id="ui-workflow-preview"><summary>ComfyUI Workflow JSONを見る</summary><p class="json-note">ComfyUIキャンバスでノードを読み込み、編集する形式です。</p><pre id="ui-workflow-json"></pre></details>
+      <details class="json-preview hidden" id="api-prompt-preview"><summary>API Prompt JSONを見る</summary><p class="json-note">ComfyUI APIへ送信するPrompt形式です。キャンバスへ読み込むWorkflowとは異なります。</p><button id="copy-workflow" class="text-button">コピー</button><pre id="workflow-json"></pre></details>
+      <div class="explain">選択したCheckpointからモデル・CLIP・VAEを読み込み、プロンプトと生成設定をKSamplerへ渡します。</div>
+      <div id="result" class="result hidden"><h3>生成結果</h3><div id="result-images" class="result-images"></div><p id="result-meta" class="result-meta"></p><button id="regenerate-button" class="button secondary full">同じ設定で再生成</button></div>
+    </aside>
+  </main>
+  <dialog id="settings-dialog"><form method="dialog" id="settings-form"><div class="section-heading"><div><p class="eyebrow">SETTINGS</p><h2>接続設定</h2></div><button class="icon-button" value="cancel" aria-label="閉じる">×</button></div><label class="field-label">ComfyUI API URL<input id="comfy-url" type="url" value="http://127.0.0.1:8188"></label><label class="field-label">ComfyUIルートフォルダ<input id="comfy-path" type="text" placeholder="例：C:\\ComfyUI（自動検出時は空欄）"></label><div class="dialog-field-row"><label class="field-label">Web UIポート<input id="web-port" type="number" min="1024" max="65535" value="7865"></label><label class="check-label"><input id="open-browser" type="checkbox" checked>起動時にブラウザを開く</label></div><p class="help-text">ルートフォルダには models フォルダが必要です。ポートの変更はアプリを再起動すると反映されます。Stability Matrixの場合もComfyUIパッケージのフォルダを指定してください。</p><div class="dialog-actions"><button class="button secondary" value="cancel">キャンセル</button><button class="button primary" id="settings-save" value="save">保存して再スキャン</button></div></form></dialog>
+  <script src="/static/js/app.js" defer></script>
+</body>
+</html>
