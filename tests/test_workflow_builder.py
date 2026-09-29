@@ -209,6 +209,37 @@ class WorkflowBuilderTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_ui_workflow(ui)
 
+    def test_upscale_definition_generates_api_and_canvas_graph_without_checkpoint_profile(self):
+        request = WorkflowBuildRequest(
+            generation_type="upscale", input_image_id="upload-1", upscale_model="4x-UltraSharp.pth",
+        )
+        definition = build_definition(request, "upscale", "cwa_input.png")
+        api = to_api_prompt(definition)
+        self.assertEqual(api["1"], {"class_type": "LoadImage", "inputs": {"image": "cwa_input.png"}})
+        self.assertEqual(api["2"], {"class_type": "UpscaleModelLoader", "inputs": {"model_name": "4x-UltraSharp.pth"}})
+        self.assertEqual(api["3"]["class_type"], "ImageUpscaleWithModel")
+        self.assertEqual(api["3"]["inputs"], {"upscale_model": ["2", 0], "image": ["1", 0]})
+        self.assertEqual(api["4"], {"class_type": "SaveImage", "inputs": {"images": ["3", 0], "filename_prefix": "ComfyWorkflowBuilder_Upscale"}})
+        ui = to_ui_workflow(definition)
+        nodes = {node["id"]: node for node in ui["nodes"]}
+        self.assertEqual(set(nodes), {1, 2, 3, 4})
+        self.assertEqual(nodes[1]["widgets_values"], ["cwa_input.png", "image"])
+        self.assertEqual(nodes[2]["widgets_values"], ["4x-UltraSharp.pth"])
+        self.assertEqual(ui["links"], [
+            [1, 2, 0, 3, 0, "UPSCALE_MODEL"],
+            [2, 1, 0, 3, 1, "IMAGE"],
+            [3, 3, 0, 4, 0, "IMAGE"],
+        ])
+        validate_ui_workflow(ui)
+
+    def test_upscale_requires_image_and_model_and_rejects_sampler_options(self):
+        request = WorkflowBuildRequest(generation_type="upscale", upscale_model="4x.pth")
+        with self.assertRaisesRegex(ValueError, "入力画像が必要"):
+            build_definition(request, "upscale")
+        request = WorkflowBuildRequest(generation_type="upscale", input_image_id="upload-1")
+        with self.assertRaisesRegex(ValueError, "Upscale Modelを選択"):
+            build_definition(request, "upscale", "cwa_input.png")
+
 
 if __name__ == "__main__":
     unittest.main()

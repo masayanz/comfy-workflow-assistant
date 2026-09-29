@@ -1,4 +1,4 @@
-const state = { models: [], profiles: new Map(), family: 'all', selected: null, activeProfile: null, profileRequest: 0, lastPayload: null, inputImage: null, isRunning: false };
+const state = { models: [], comfyModels: [], profiles: new Map(), family: 'all', selected: null, activeProfile: null, profileRequest: 0, lastPayload: null, inputImage: null, isRunning: false, comfyOnline: false, diagnostics: null };
 const $ = (selector) => document.querySelector(selector);
 
 async function api(path, options = {}) {
@@ -9,7 +9,7 @@ async function api(path, options = {}) {
 }
 
 function formatSize(size) {
-  if (size == null) return 'ComfyUIから取得';
+  if (size == null) return 'サイズ不明';
   if (size > 1024 ** 3) return `${(size / 1024 ** 3).toFixed(1)} GB`;
   return `${(size / 1024 ** 2).toFixed(0)} MB`;
 }
@@ -58,6 +58,11 @@ function escapeHtml(value) { return String(value).replace(/[&<>"']/g, (char) => 
 
 function renderSelected() {
   const holder = $('#selected-model');
+  if (selectedGenerationType() === 'upscale') {
+    renderUpscaleSelection();
+    setGenerationEnabled(true);
+    return;
+  }
   if (!state.selected) {
     holder.innerHTML = '<span class="model-placeholder">左からCheckpointを選択してください</span>';
     $('#model-family-tag').textContent = '未選択';
@@ -92,11 +97,54 @@ function renderFamilyFilters() {
 }
 
 function setGenerationEnabled(enabled) {
-  const imageReady = selectedGenerationType() !== 'img2img' || Boolean(state.inputImage?.upload_id);
+  const mode = selectedGenerationType();
+  if (mode === 'upscale') {
+    enabled = state.comfyOnline && Boolean(state.inputImage?.upload_id) && Boolean($('#upscale-model').value)
+      && state.comfyModels.some((model) => model.type === 'upscale_model' && (model.comfy_name || model.name) === $('#upscale-model').value);
+  }
+  const imageReady = !['img2img', 'upscale'].includes(mode) || Boolean(state.inputImage?.upload_id);
   const buildReady = enabled && imageReady && !state.isRunning;
   const assetsReady = buildReady && selectedComponentsReady();
   $('#build-button').disabled = !buildReady;
   for (const selector of ['#save-ui-button', '#save-api-button', '#run-button']) $(selector).disabled = !assetsReady;
+}
+
+function renderUpscaleModelOptions() {
+  const select = $('#upscale-model');
+  const previous = select.value;
+  const models = state.comfyModels.filter((model) => model.type === 'upscale_model');
+  select.innerHTML = `<option value="">${models.length ? 'モデルを選択してください' : '親機ComfyUIにUpscale Modelがありません'}</option>` +
+    models.map((model) => {
+      const scaleLabel = model.scale ? ` · 推定 ${model.scale}x` : '';
+      return `<option value="${escapeHtml(model.comfy_name || model.name)}">${escapeHtml(model.name)} · ${formatSize(model.size)}${scaleLabel}</option>`;
+    }).join('');
+  if (models.some((model) => (model.comfy_name || model.name) === previous)) select.value = previous;
+  updateUpscaleEstimate();
+  renderUpscaleSelection();
+}
+
+function renderUpscaleSelection() {
+  if (selectedGenerationType() !== 'upscale') return;
+  const model = state.comfyModels.find((item) => item.type === 'upscale_model' && (item.comfy_name || item.name) === $('#upscale-model').value);
+  const input = state.inputImage;
+  $('#selected-model').innerHTML = `<span class="model-icon large">⇧</span><div class="selected-model-info"><strong>${escapeHtml(model?.name || 'Upscale Model未選択')}</strong><small>${input ? `${escapeHtml(input.name)} · ${input.width} × ${input.height}` : '入力画像をアップロードしてください'}</small></div>`;
+  $('#model-family-tag').textContent = 'Upscale';
+}
+
+function updateUpscaleEstimate() {
+  const estimate = $('#upscale-estimate');
+  if (!estimate) return;
+  const input = state.inputImage;
+  const selected = state.comfyModels.find((model) => model.type === 'upscale_model' && (model.comfy_name || model.name) === $('#upscale-model').value);
+  if (!input?.width || !input?.height) {
+    estimate.textContent = '入力画像を選ぶと予想出力サイズを表示します。';
+    return;
+  }
+  if (!selected?.scale) {
+    estimate.textContent = `入力 ${input.width} × ${input.height} · このモデル名から倍率を特定できないため出力サイズは実行後に表示します。`;
+    return;
+  }
+  estimate.textContent = `入力 ${input.width} × ${input.height} → 予想 ${input.width * selected.scale} × ${input.height * selected.scale}（モデル名からの推定 ${selected.scale}x）`;
 }
 
 function selectedGenerationType() {
@@ -114,13 +162,26 @@ function syncGenerationMode(profile) {
 }
 
 function updateGenerationModeUI() {
-  const imageMode = selectedGenerationType() === 'img2img';
-  $('#generation-type-label').textContent = imageMode ? 'IMG2IMG' : 'TXT2IMG';
+  const mode = selectedGenerationType();
+  const imageMode = mode === 'img2img' || mode === 'upscale';
+  const upscaleMode = mode === 'upscale';
+  $('#generation-type-label').textContent = upscaleMode ? 'UPSCALE' : imageMode ? 'IMG2IMG' : 'TXT2IMG';
+  $('.layout').classList.toggle('upscale-mode', upscaleMode);
+  document.body.classList.toggle('upscale-mode', upscaleMode);
+  $('#prompt-fields').classList.toggle('hidden', upscaleMode);
+  $('#generation-settings').classList.toggle('hidden', upscaleMode);
   $('#image-input-section').classList.toggle('hidden', !imageMode);
+  $('#denoise-section').classList.toggle('hidden', upscaleMode);
+  $('#upscale-options').classList.toggle('hidden', !upscaleMode);
   $('#resolution-grid').classList.toggle('hidden', imageMode);
+  $('.builder-panel h2').textContent = upscaleMode ? '画像をアップスケール' : 'ワークフローを作成';
+  $('.preview-panel .explain').textContent = upscaleMode
+    ? '入力画像をComfyUIのUpscale Modelで拡大し、Save Imageへ保存します。CheckpointやPromptは使いません。'
+    : '選択したCheckpointからモデル・CLIP・VAEを読み込み、プロンプトと生成設定をKSamplerへ渡します。';
+  renderUpscaleModelOptions();
   renderNodeFlow();
   const profile = state.activeProfile;
-  setGenerationEnabled(Boolean(profile?.enabled && profile.capabilities[selectedGenerationType()]));
+  setGenerationEnabled(upscaleMode || Boolean(profile?.enabled && profile.capabilities[mode]));
 }
 
 function selectedComponentsReady() {
@@ -129,6 +190,12 @@ function selectedComponentsReady() {
 }
 
 function renderNodeFlow() {
+  if (selectedGenerationType() === 'upscale') {
+    $('#model-family-tag').textContent = 'Upscale';
+    $('#node-flow').innerHTML = '<span>Load Image</span><i>↓</i><span>Load Upscale Model</span><i>↓</i><span>Upscale Image</span><i>↓</i><span>Save Image</span>';
+    return;
+  }
+  $('#model-family-tag').textContent = state.selected ? familyName(state.selected.family) : 'SDXL';
   if (state.selected?.family === 'flux') {
     $('#node-flow').innerHTML = '<span>UNET Loader + Dual CLIP Loader</span><i>↓</i><span>CLIP Text Encode</span><i>↓</i><span>Flux Guidance + Empty SD3 Latent</span><i>↓</i><span>KSampler</span><i>↓</i><span>VAE Decode</span><i>↓</i><span>Save Image</span>';
     return;
@@ -148,6 +215,8 @@ function clearInputImage() {
   $('#input-image-name').textContent = '';
   $('#input-image-size').textContent = '';
   $('#input-image-file').value = '';
+  updateUpscaleEstimate();
+  renderUpscaleSelection();
   setGenerationEnabled(Boolean(state.activeProfile?.enabled && state.activeProfile.capabilities[selectedGenerationType()]));
 }
 
@@ -168,11 +237,14 @@ async function uploadInputImage(file) {
     $('#input-image-name').textContent = body.name || file.name;
     $('#input-image-size').textContent = `${body.width} × ${body.height}`;
     $('#input-image-card').classList.remove('hidden');
+    updateUpscaleEstimate();
+    renderUpscaleSelection();
     showMessage('入力画像をComfyUIへアップロードしました。', 'success');
   } catch (error) {
     showMessage(error.message, 'error');
   } finally {
     $('#input-image-file').disabled = false;
+    renderUpscaleSelection();
     setGenerationEnabled(Boolean(state.activeProfile?.enabled && state.activeProfile.capabilities[selectedGenerationType()]));
   }
 }
@@ -198,12 +270,15 @@ async function loadModelProfile(model) {
     if (requestId !== state.profileRequest || state.selected?.path !== model.path || state.selected?.family !== model.family) return;
     state.activeProfile = profile;
     syncGenerationMode(profile);
-    const supported = profile.enabled && Boolean(profile.capabilities[selectedGenerationType()]);
-    renderModelComponents(profile);
+    const supported = selectedGenerationType() === 'upscale' || (profile.enabled && Boolean(profile.capabilities[selectedGenerationType()]));
+    if (selectedGenerationType() === 'upscale') {
+      $('#model-components').classList.add('hidden');
+      $('#model-components').innerHTML = '';
+    } else renderModelComponents(profile);
     $('#cfg-field').classList.toggle('hidden', profile.ui?.show_cfg === false);
     $('#negative-field').classList.toggle('hidden', profile.ui?.show_negative_prompt === false);
     $('#guidance-field').classList.toggle('hidden', !profile.ui?.show_guidance);
-    const loraEnabled = supported && profile.capabilities.lora;
+    const loraEnabled = selectedGenerationType() !== 'upscale' && supported && profile.capabilities.lora;
     $('#lora').disabled = !loraEnabled;
     $('#lora-weight').disabled = !loraEnabled;
     if (!loraEnabled) $('#lora').value = '';
@@ -250,14 +325,19 @@ async function refresh() {
   $('#scan-button').disabled = true;
   $('#scan-button').textContent = 'スキャン中…';
   try {
-    const [status, models, profiles] = await Promise.all([api('/api/status'), api('/api/models'), api('/api/model-profiles')]);
+    const [status, models, comfyModels, profiles] = await Promise.all([
+      api('/api/status'), api('/api/models'), api('/api/comfy/models').catch(() => []), api('/api/model-profiles'),
+    ]);
     state.models = models;
+    state.comfyModels = comfyModels;
+    state.comfyOnline = Boolean(status.comfy.online);
     state.profiles = new Map(profiles.map((profile) => [profile.id, profile]));
     renderFamilyFilters();
     const lora = $('#lora');
     const selectedLora = lora.value;
     lora.innerHTML = '<option value="">使わない</option>' + models.filter((model) => model.type === 'lora').map((model) => `<option value="${escapeHtml(model.comfy_name || model.name)}">${escapeHtml(model.name)}</option>`).join('');
     if ([...lora.options].some((option) => option.value === selectedLora)) lora.value = selectedLora;
+    renderUpscaleModelOptions();
     $('#status-dot').classList.toggle('online', status.comfy.online);
     $('#status-label').textContent = status.comfy.online ? 'ComfyUI 接続中' : 'ComfyUI 未接続';
     $('#root-label').textContent = status.comfy_path ? status.comfy_path.split(/[\\/]/).slice(-2).join('/') : (status.model_source === 'comfy_api' ? 'ComfyUI API' : '環境未検出');
@@ -274,10 +354,16 @@ async function refresh() {
 }
 
 function getPayload() {
+  const generationType = selectedGenerationType();
+  if (generationType === 'upscale') {
+    if (!state.inputImage?.upload_id) throw new Error('upscaleには入力画像が必要です。画像を選択してください。');
+    if (!state.comfyModels.some((model) => model.type === 'upscale_model')) throw new Error('親機ComfyUIにUpscale Modelがありません。環境診断から配置先と導入手順を確認してください。');
+    if (!$('#upscale-model').value) throw new Error('Upscale Modelを選択してください。');
+    return { generation_type: 'upscale', input_image_id: state.inputImage.upload_id, upscale_model: $('#upscale-model').value };
+  }
   if (!state.selected) throw new Error('Checkpointを選択してください。');
   const prompt = $('#prompt').value.trim();
   if (!prompt) throw new Error('作りたいものを入力してください。');
-  const generationType = selectedGenerationType();
   if (generationType === 'img2img' && !state.inputImage?.upload_id) throw new Error('img2imgには入力画像が必要です。画像を選択してください。');
   let width = null; let height = null;
   if (generationType === 'txt2img') {
@@ -299,20 +385,32 @@ function getPayload() {
   return payload;
 }
 
+function waitForImage(img) {
+  if (img.complete) return Promise.resolve();
+  return new Promise((resolve) => {
+    img.addEventListener('load', resolve, { once: true });
+    img.addEventListener('error', resolve, { once: true });
+    setTimeout(resolve, 30000);
+  });
+}
+
 async function run(payload = null) {
   if (state.isRunning) return;
   state.isRunning = true;
+  const startedAt = performance.now();
   try {
     const request = payload || getPayload();
     state.lastPayload = request;
+    const isUpscale = request.generation_type === 'upscale';
     $('#run-button').disabled = true;
     $('#regenerate-button').disabled = true;
-    showMessage('ComfyUIへWorkflowを送信しています…', 'info');
+    showMessage(isUpscale ? 'Upscale WorkflowをComfyUIへ送信しています…' : 'ComfyUIへWorkflowを送信しています…', 'info');
     const queued = await api('/api/workflow/run', { method: 'POST', body: JSON.stringify(request) });
-    request.seed = queued.seed;
+    if (queued.seed != null) request.seed = queued.seed;
     request.input_image = queued.input_image || request.input_image || null;
+    request.upscale_scale = queued.upscale_scale ?? request.upscale_scale;
     state.lastPayload = request;
-    showMessage(`Queue登録済み · Seed ${queued.seed}`, 'info');
+    showMessage(isUpscale ? 'UpscaleをQueueへ登録しました。' : `Queue登録済み · Seed ${queued.seed}`, 'info');
     const deadline = Date.now() + 15 * 60 * 1000;
     let result;
     while (Date.now() < deadline) {
@@ -320,11 +418,26 @@ async function run(payload = null) {
       result = await api(`/api/workflow/status/${encodeURIComponent(queued.prompt_id)}`);
       if (result.status === 'COMPLETED') break;
       if (result.status === 'ERROR') throw new Error(result.message || 'ComfyUIで画像生成に失敗しました。');
-      showMessage(result.status === 'RUNNING' ? '画像を生成中です…' : 'Queue待機中です…', 'info');
+      showMessage(result.status === 'RUNNING' ? (isUpscale ? '画像をアップスケール中です…' : '画像を生成中です…') : 'Queue待機中です…', 'info');
     }
     if (!result || result.status !== 'COMPLETED') throw new Error('画像生成がタイムアウトしました。ComfyUIの状態を確認してください。');
     if (!result.images?.length) throw new Error('ComfyUIは処理を完了しましたが、画像が見つかりませんでした。SaveImageノードと出力を確認してください。');
     $('#result-images').innerHTML = result.images.map((image) => `<a href="${image.url}" target="_blank"><img src="${image.url}" alt="生成画像"></a>`).join('');
+    if (isUpscale) {
+      const outputImages = [...$('#result-images').querySelectorAll('img')];
+      await Promise.all(outputImages.map(waitForImage));
+      const input = request.input_image || state.inputImage || {};
+      const firstOutput = outputImages[0];
+      const inputSize = `${input.width || '?'} × ${input.height || '?'}`;
+      const outputSize = firstOutput?.naturalWidth ? `${firstOutput.naturalWidth} × ${firstOutput.naturalHeight}` : '出力サイズ不明';
+      const model = state.comfyModels.find((item) => item.type === 'upscale_model' && (item.comfy_name || item.name) === request.upscale_model);
+      const scaleLabel = request.upscale_scale ? ` · 倍率 ${request.upscale_scale}x` : '';
+      const seconds = ((performance.now() - startedAt) / 1000).toFixed(1);
+      $('#result-meta').textContent = `${inputSize} → ${outputSize} · ${model?.name || request.upscale_model}${scaleLabel} · ${seconds}秒`;
+      $('#result').classList.remove('hidden');
+      showMessage('アップスケールが完了しました。', 'success');
+      return;
+    }
     const modelLabel = request.profile_id === 'flux' ? `${request.diffusion_model} · ${request.clip_name1} · ${request.clip_name2} · ${request.vae_model}` : (state.selected?.name || request.model);
     const guidanceLabel = request.profile_id === 'flux' ? ` · Guidance ${request.guidance}` : '';
     const imageLabel = request.generation_type === 'img2img' ? ` · ${request.input_image?.name || request.input_image_id} · 変化 ${request.denoise}` : '';
@@ -361,6 +474,71 @@ $('#copy-workflow').addEventListener('click', async () => {
   catch { showMessage('クリップボードへコピーできませんでした。JSON欄からコピーしてください。', 'error'); }
 });
 
+function renderDiagnosticAssets(models, kind) {
+  const items = models.filter((item) => item.type === kind);
+  if (!items.length) return '<p class="help-text">ComfyUI APIの認識一覧は0件です。</p>';
+  return `<ul class="diagnostic-assets">${items.map((item) => `<li><span>${escapeHtml(item.comfy_name || item.name)}</span><small>${formatSize(item.size)}${item.family ? ` · ${escapeHtml(familyName(item.family))}` : ''}${item.inventory_source === 'loader_enum' ? ' · Loader選択肢' : ''}</small></li>`).join('')}</ul>`;
+}
+
+async function loadDiagnostics() {
+  $('#diagnostics-status').textContent = '親機ComfyUIから取得中…';
+  $('#diagnostics-content').innerHTML = '<div class="empty-state">モデルとノード情報を問い合わせています…</div>';
+  try {
+    const data = await api('/api/diagnostics');
+    state.diagnostics = data;
+    state.comfyModels = data.models || state.comfyModels;
+    renderUpscaleModelOptions();
+    if (!data.online) {
+      $('#diagnostics-content').innerHTML = '<div class="diagnostic-warning">ComfyUIがオフラインです。接続設定と親機の起動状態を確認してください。</div>';
+      $('#diagnostics-status').textContent = 'OFFLINE';
+      return;
+    }
+    const server = data.server || {};
+    const device = server.devices?.[0] || {};
+    const vram = device.vram_total ? `${(device.vram_total / 1024 ** 3).toFixed(1)} GB` : '不明';
+    const folders = data.model_folder_paths || {};
+    const folderDetails = Object.entries(folders).map(([category, paths]) => `<li><strong>${escapeHtml(category)}</strong><span>${paths.length ? paths.map(escapeHtml).join('<br>') : 'APIから保存先を取得できません'}</span></li>`).join('');
+    const counts = data.model_counts || {};
+    const categories = [
+      ['Checkpoints', 'checkpoints', 'checkpoint'], ['LoRA', 'loras', 'lora'], ['VAE', 'vae', 'vae'],
+      ['UNET / Diffusion Models', 'diffusion_models', 'diffusion_model'], ['Text Encoders', 'text_encoders', 'text_encoder'],
+      ['Upscale Models', 'upscale_models', 'upscale_model'], ['ControlNet', 'controlnet', 'controlnet'],
+    ];
+    const modelSections = categories.map(([label, key, kind]) => `<details class="diagnostic-section"><summary>${escapeHtml(label)} <span>${counts[key] ?? 0}</span></summary>${renderDiagnosticAssets(data.models || [], kind)}</details>`).join('');
+    const requiredNodes = Object.entries(data.upscale?.node_available || {}).map(([name, available]) => `<li>${escapeHtml(name)} <span class="diagnostic-state ${available ? 'ready' : 'missing'}">${available ? '利用可能' : '不足'}</span></li>`).join('');
+    const upscaleFolder = folders.upscale_models?.[0] || (server.comfyui_root ? `${server.comfyui_root}\\models\\upscale_models` : 'models\\upscale_models');
+    const upscaleModels = data.upscale?.models || [];
+    const upscaleHint = upscaleModels.length
+      ? '<p class="diagnostic-ok">親機ComfyUIがUpscale Modelを認識しています。</p>'
+      : `<div class="diagnostic-warning">Upscale Modelは0件です。親機の保存先: <code>${escapeHtml(upscaleFolder)}</code><br><code>scripts/Install-RealESRGAN-On-Parent.ps1</code>を親機へコピーし、親機PowerShellで実行してください。ComfyUIを再起動してから再取得します。</div>`;
+    const sd15 = data.sd15 || {};
+    const misplacedLoras = data.checkpoint_metadata?.misplaced_loras || [];
+    const misplacedLoraSummary = misplacedLoras.length
+      ? `Checkpointフォルダ内でLoRAのメタデータを検出（LoRA Loaderの認識対象外）: ${misplacedLoras.map((item) => escapeHtml(item.comfy_name || item.name)).join(', ')}`
+      : 'Checkpointフォルダ内にLoRAメタデータの候補はありません。';
+    const sd15Summary = sd15.checkpoint_count
+      ? `SD1.5として分類済み: ${sd15.checkpoint_count}件 (${(sd15.checkpoints || []).map(escapeHtml).join(', ')})`
+      : `SD1.5と確認できたCheckpointは0件です。未分類: ${(sd15.unclassified_checkpoint_names || []).map(escapeHtml).join(', ') || 'なし'}`;
+    const flux = data.flux || {};
+    const fluxSummary = flux.missing_assets?.length
+      ? `不足: ${flux.missing_assets.map(escapeHtml).join('、')}`
+      : 'Profileが要求するFluxモデル構成を認識しています。';
+    const packs = data.custom_nodes?.packs || [];
+    $('#diagnostics-content').innerHTML = `
+      <section class="diagnostic-summary"><strong>ComfyUI ${escapeHtml(server.version || 'version不明')} · ONLINE</strong><span>${escapeHtml(server.comfyui_root || '親機ルート不明')}</span><span>${escapeHtml(device.name || server.os || 'GPU情報不明')} · VRAM ${vram}</span><small>モデル一覧: 親機ComfyUI API · ノード型 ${data.node_count ?? 0}</small></section>
+      <section><h3>Upscale 実行要件</h3><ul class="diagnostic-nodes">${requiredNodes}</ul>${upscaleHint}</section>
+      <section><h3>モデル棚卸し</h3>${modelSections}</section>
+      <section><h3>SD1.5確認</h3><p>${sd15Summary}</p><p class="help-text">未分類Checkpointは名前だけでSD1.5と判断せず、必要ならユーザーが分類してください。</p><p>${misplacedLoraSummary}</p></section>
+      <section><h3>Flux不足</h3><p>${fluxSummary}</p>${Object.entries(flux.available_components || {}).map(([key, names]) => `<p class="help-text">${escapeHtml(key)}: ${names.length ? names.map(escapeHtml).join(', ') : '認識なし'}</p>`).join('')}</section>
+      <section><h3>ComfyUI登録済みCustom Node</h3><p>${data.custom_nodes?.pack_count ?? 0} packs · ${data.custom_nodes?.node_count ?? 0} node types</p><p class="help-text">object_infoのpython_moduleから集計しています。</p><ul class="diagnostic-assets">${packs.map((pack) => `<li><span>${escapeHtml(pack.name)}</span><small>${pack.node_count} nodes</small></li>`).join('') || '<li><span>登録済みCustom Nodeなし</span></li>'}</ul></section>
+      <section><h3>親機モデル保存先</h3><ul class="diagnostic-paths">${folderDetails || '<li>ComfyUI APIから保存先一覧を取得できません。</li>'}</ul></section>`;
+    $('#diagnostics-status').textContent = 'ComfyUI APIで照合済み';
+  } catch (error) {
+    $('#diagnostics-status').textContent = '取得エラー';
+    $('#diagnostics-content').innerHTML = `<div class="diagnostic-warning">${escapeHtml(error.message)}</div>`;
+  }
+}
+
 $('#filters').addEventListener('click', (event) => {
   const button = event.target.closest('[data-filter]'); if (!button) return;
   state.family = button.dataset.filter;
@@ -379,7 +557,11 @@ $('#input-image-file').addEventListener('change', (event) => { const file = even
 $('#remove-input-image').addEventListener('click', () => { clearInputImage(); showMessage('入力画像の選択を解除しました。', 'info'); });
 $('#denoise').addEventListener('input', () => { $('#denoise-value').value = Number($('#denoise').value).toFixed(2); $('#denoise-value').textContent = Number($('#denoise').value).toFixed(2); });
 $('#lora').addEventListener('change', renderNodeFlow);
+$('#upscale-model').addEventListener('change', () => { updateUpscaleEstimate(); renderUpscaleSelection(); setGenerationEnabled(true); });
 $('#settings-open').addEventListener('click', () => $('#settings-dialog').showModal());
+$('#diagnostics-open').addEventListener('click', () => { $('#diagnostics-dialog').showModal(); loadDiagnostics(); });
+$('#diagnostics-close').addEventListener('click', () => $('#diagnostics-dialog').close());
+$('#diagnostics-refresh').addEventListener('click', loadDiagnostics);
 $('#settings-form').addEventListener('submit', async (event) => {
   if (event.submitter?.value !== 'save') return;
   event.preventDefault();

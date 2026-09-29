@@ -30,6 +30,7 @@ class WorkflowDefinition:
     nodes: tuple[WorkflowNodeDefinition, ...]
     generation_type: str = "txt2img"
     input_image: str | None = None
+    upscale_model: str | None = None
     denoise: float | None = None
 
 
@@ -48,6 +49,8 @@ UI_NODE_SPECS = {
     "DualCLIPLoader": UiNodeSpec((), (("CLIP", "CLIP"),), ("clip_name1", "clip_name2", "type", "device")),
     "VAELoader": UiNodeSpec((), (("VAE", "VAE"),), ("vae_name",)),
     "LoadImage": UiNodeSpec((), (("IMAGE", "IMAGE"), ("MASK", "MASK")), ("image",), widget_values_suffix=("image",)),
+    "UpscaleModelLoader": UiNodeSpec((), (("UPSCALE_MODEL", "UPSCALE_MODEL"),), ("model_name",)),
+    "ImageUpscaleWithModel": UiNodeSpec((("upscale_model", "UPSCALE_MODEL"), ("image", "IMAGE")), (("IMAGE", "IMAGE"),)),
     "VAEEncode": UiNodeSpec((("pixels", "IMAGE"), ("vae", "VAE")), (("LATENT", "LATENT"),)),
     "CLIPTextEncode": UiNodeSpec((("clip", "CLIP"),), (("CONDITIONING", "CONDITIONING"),), ("text",)),
     "FluxGuidance": UiNodeSpec((("conditioning", "CONDITIONING"),), (("CONDITIONING", "CONDITIONING"),), ("guidance",)),
@@ -65,6 +68,17 @@ UI_NODE_SPECS = {
 
 
 def build_definition(request: WorkflowBuildRequest, family: str = "sdxl", input_image: str | None = None) -> WorkflowDefinition:
+    if request.generation_type == "upscale":
+        if not input_image:
+            raise ValueError("upscaleには入力画像が必要です。画像をアップロードしてください。")
+        if not request.upscale_model:
+            raise ValueError("Upscale Modelを選択してください。")
+        if request.lora:
+            raise ValueError("upscaleではLoRAを指定できません。")
+        definition = _build_upscale_definition(request, input_image)
+        validate_definition(definition)
+        return definition
+
     try:
         profile = ModelProfileService().get_profile(family)
     except (KeyError, ValueError) as exc:
@@ -131,6 +145,28 @@ def build_definition(request: WorkflowBuildRequest, family: str = "sdxl", input_
     definition = WorkflowDefinition(family=family, nodes=tuple(nodes), generation_type="txt2img")
     validate_definition(definition)
     return definition
+
+
+def _build_upscale_definition(request: WorkflowBuildRequest, input_image: str) -> WorkflowDefinition:
+    nodes = (
+        WorkflowNodeDefinition(1, "LoadImage", {"image": input_image}),
+        WorkflowNodeDefinition(2, "UpscaleModelLoader", {"model_name": request.upscale_model}),
+        WorkflowNodeDefinition(3, "ImageUpscaleWithModel", {
+            "upscale_model": Connection(2, 0),
+            "image": Connection(1, 0),
+        }),
+        WorkflowNodeDefinition(4, "SaveImage", {
+            "images": Connection(3, 0),
+            "filename_prefix": "ComfyWorkflowBuilder_Upscale",
+        }),
+    )
+    return WorkflowDefinition(
+        family="upscale",
+        nodes=nodes,
+        generation_type="upscale",
+        input_image=input_image,
+        upscale_model=request.upscale_model,
+    )
 
 
 def _build_img2img_definition(request: WorkflowBuildRequest, profile: ModelProfile, input_image: str) -> WorkflowDefinition:
@@ -244,13 +280,14 @@ def to_api_prompt(definition: WorkflowDefinition) -> dict:
 
 
 def to_ui_workflow(definition: WorkflowDefinition) -> dict:
-    try:
-        profile = ModelProfileService().get_profile(definition.family)
-    except (KeyError, ValueError) as exc:
-        raise ValueError(f"モデルProfileが見つからないか不正です: {definition.family}") from exc
-    capability = getattr(profile.capabilities, definition.generation_type, False)
-    if not profile.enabled or not capability:
-        raise ValueError(f"{profile.name}の{definition.generation_type} ComfyUI Workflow JSONには現在対応していません。")
+    if definition.generation_type != "upscale":
+        try:
+            profile = ModelProfileService().get_profile(definition.family)
+        except (KeyError, ValueError) as exc:
+            raise ValueError(f"モデルProfileが見つからないか不正です: {definition.family}") from exc
+        capability = getattr(profile.capabilities, definition.generation_type, False)
+        if not profile.enabled or not capability:
+            raise ValueError(f"{profile.name}の{definition.generation_type} ComfyUI Workflow JSONには現在対応していません。")
 
     links = []
     next_link_id = 1
@@ -320,6 +357,8 @@ def to_ui_workflow(definition: WorkflowDefinition) -> dict:
 
 
 def _node_position(definition: WorkflowDefinition, node_id: int) -> list[int]:
+    if definition.generation_type == "upscale":
+        return {1: [30, 370], 2: [430, 120], 3: [850, 370], 4: [1290, 370]}[node_id]
     if definition.family == "flux":
         positions = {
             1: [40, 300], 2: [40, 570], 3: [470, 820], 4: [470, 570], 5: [900, 570],
@@ -358,6 +397,8 @@ def _node_size(node_type: str) -> list[int]:
         "DualCLIPLoader": [315, 150],
         "VAELoader": [315, 58],
         "LoadImage": [315, 350],
+        "UpscaleModelLoader": [315, 70],
+        "ImageUpscaleWithModel": [315, 106],
         "VAEEncode": [210, 58],
         "CLIPTextEncode": [400, 200],
         "FluxGuidance": [315, 82],
@@ -392,12 +433,17 @@ def build_workflow(request: WorkflowBuildRequest, family: str = "sdxl", input_im
 
 
 def validate_definition(definition: WorkflowDefinition) -> None:
-    if definition.generation_type not in {"txt2img", "img2img"}:
+    if definition.generation_type not in {"txt2img", "img2img", "upscale"}:
         raise ValueError("WorkflowDefinitionのgeneration_typeが正しくありません。")
+    if definition.generation_type == "upscale":
+        if definition.family != "upscale" or not definition.input_image or not definition.upscale_model or definition.denoise is not None:
+            raise ValueError("upscaleには入力画像とUpscale Modelが必要です。")
+    elif definition.upscale_model is not None:
+        raise ValueError("Upscale Modelはupscale以外に指定できません。")
     if definition.generation_type == "img2img":
         if not definition.input_image or definition.denoise is None or not 0.0 <= definition.denoise <= 1.0:
             raise ValueError("img2imgには入力画像と0.0〜1.0のdenoiseが必要です。")
-    elif definition.input_image is not None or definition.denoise is not None:
+    elif definition.generation_type == "txt2img" and (definition.input_image is not None or definition.denoise is not None):
         raise ValueError("txt2imgにimg2img用の値は指定できません。")
     ids = {node.node_id for node in definition.nodes}
     if len(ids) != len(definition.nodes):
@@ -462,7 +508,11 @@ def validate_ui_workflow(workflow: dict) -> None:
 
 
 def validate_workflow(workflow: dict) -> None:
-    required = {"1", "2", "3", "4", "5", "6", "7"}
+    is_upscale = isinstance(workflow, dict) and any(
+        isinstance(node, dict) and node.get("class_type") == "UpscaleModelLoader"
+        for node in workflow.values()
+    )
+    required = {"1", "2", "3", "4"} if is_upscale else {"1", "2", "3", "4", "5", "6", "7"}
     if not isinstance(workflow, dict) or not required.issubset(workflow):
         raise ValueError("ワークフローテンプレートに必須ノードがありません。")
     for node_id, node in workflow.items():

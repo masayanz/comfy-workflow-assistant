@@ -203,6 +203,105 @@ class WorkflowApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("Flux", response.json()["message"])
 
+    def test_upscale_build_and_ui_workflow_use_parent_model_and_uploaded_image(self):
+        upscale = {"name": "4x-UltraSharp.pth", "comfy_name": "4x-UltraSharp.pth", "type": "upscale_model", "size": 1000, "scale": 4, "family": "unknown", "recognized": True}
+        image = {"upload_id": "u1", "comfy_name": "cwa_input.png", "name": "source.png", "width": 320, "height": 240, "created_at": 1e20}
+        with patch("app.main.client") as client_factory, patch("app.main._uploaded_images", {"u1": image}):
+            client_factory.return_value.status = AsyncMock(return_value={"online": True})
+            client_factory.return_value.available_models = AsyncMock(return_value=[upscale])
+            client_factory.return_value.object_info = AsyncMock(return_value={"name": "native node"})
+            response = TestClient(app).post("/api/workflow/build", json={
+                "generation_type": "upscale", "input_image_id": "u1", "upscale_model": "4x-UltraSharp.pth",
+            })
+        self.assertEqual(response.status_code, 200)
+        result = response.json()
+        self.assertEqual(result["generation_type"], "upscale")
+        self.assertEqual(result["workflow"]["1"]["class_type"], "LoadImage")
+        self.assertEqual(result["workflow"]["2"]["inputs"]["model_name"], "4x-UltraSharp.pth")
+        self.assertEqual(result["workflow"]["3"]["inputs"]["image"], ["1", 0])
+        self.assertEqual(result["ui_workflow"]["nodes"][0]["widgets_values"], ["cwa_input.png", "image"])
+        self.assertEqual(result["input_image"], {"name": "source.png", "width": 320, "height": 240})
+
+    def test_upscale_save_ui_creates_canvas_workflow(self):
+        upscale = {"name": "RealESRGAN_x4plus.pth", "comfy_name": "RealESRGAN_x4plus.pth", "type": "upscale_model", "size": 1000, "scale": 4, "family": "unknown"}
+        image = {"upload_id": "u1", "comfy_name": "cwa_input.png", "name": "source.png", "width": 256, "height": 128, "created_at": 1e20}
+        with TemporaryDirectory() as directory, patch("app.main.OUTPUT_DIR", Path(directory)), \
+             patch("app.main.client") as client_factory, patch("app.main._uploaded_images", {"u1": image}):
+            client_factory.return_value.status = AsyncMock(return_value={"online": True})
+            client_factory.return_value.available_models = AsyncMock(return_value=[upscale])
+            client_factory.return_value.object_info = AsyncMock(return_value={"name": "native node"})
+            response = TestClient(app).post("/api/workflow/save-ui", json={
+                "generation_type": "upscale", "input_image_id": "u1", "upscale_model": "RealESRGAN_x4plus.pth",
+            })
+            self.assertEqual(response.status_code, 200)
+            saved = json.loads((Path(directory) / response.json()["filename"]).read_text(encoding="utf-8"))
+        self.assertTrue(response.json()["filename"].endswith(".workflow.json"))
+        self.assertEqual({node["type"] for node in saved["nodes"]}, {"LoadImage", "UpscaleModelLoader", "ImageUpscaleWithModel", "SaveImage"})
+
+    def test_upscale_run_queues_native_nodes_and_reports_estimated_dimensions(self):
+        upscale = {"name": "4x-UltraSharp.pth", "comfy_name": "4x-UltraSharp.pth", "type": "upscale_model", "size": 1000, "scale": 4, "family": "unknown"}
+        image = {"upload_id": "u1", "comfy_name": "cwa_input.png", "name": "source.png", "width": 300, "height": 180, "created_at": 1e20}
+        with patch("app.main.client") as client_factory, patch("app.main._uploaded_images", {"u1": image}):
+            client_factory.return_value.status = AsyncMock(return_value={"online": True})
+            client_factory.return_value.available_models = AsyncMock(return_value=[upscale])
+            client_factory.return_value.object_info = AsyncMock(return_value={"name": "native node"})
+            client_factory.return_value.queue = AsyncMock(return_value="upscale-prompt")
+            response = TestClient(app).post("/api/workflow/run", json={
+                "generation_type": "upscale", "input_image_id": "u1", "upscale_model": "4x-UltraSharp.pth",
+            })
+        self.assertEqual(response.status_code, 200)
+        queued = client_factory.return_value.queue.await_args.args[0]
+        self.assertEqual(queued["1"]["class_type"], "LoadImage")
+        self.assertEqual(queued["2"]["class_type"], "UpscaleModelLoader")
+        self.assertEqual(queued["3"]["class_type"], "ImageUpscaleWithModel")
+        self.assertEqual(response.json()["estimated_output_size"], {"width": 1200, "height": 720})
+
+    def test_upscale_rejects_missing_parent_model_and_offline_comfy(self):
+        with patch("app.main.client") as client_factory:
+            client_factory.return_value.status = AsyncMock(return_value={"online": True})
+            client_factory.return_value.available_models = AsyncMock(return_value=[])
+            response = TestClient(app).post("/api/workflow/build", json={
+                "generation_type": "upscale", "input_image_id": "u1", "upscale_model": "missing.pth",
+            })
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("親機ComfyUIに見つかりません", response.json()["detail"])
+
+        with patch("app.main.client") as client_factory:
+            client_factory.return_value.status = AsyncMock(return_value={"online": False})
+            response = TestClient(app).post("/api/workflow/run", json={
+                "generation_type": "upscale", "input_image_id": "u1", "upscale_model": "model.pth",
+            })
+        self.assertEqual(response.status_code, 503)
+
+    def test_diagnostics_endpoint_returns_parent_inventory_and_missing_assets(self):
+        report = {
+            "online": True, "models": [
+                {"name": "v1-5-pruned.safetensors", "comfy_name": "v1-5-pruned.safetensors", "type": "checkpoint", "family": "sd15"},
+                {"name": "lora-misfiled.safetensors", "comfy_name": "lora-misfiled.safetensors", "type": "checkpoint", "family": "unknown", "metadata_role": "lora"},
+                {"name": "unclassified.safetensors", "comfy_name": "unclassified.safetensors", "type": "checkpoint", "family": "unknown", "metadata_role": "unverified"},
+                {"name": "RealESRGAN_x4plus.pth", "comfy_name": "RealESRGAN_x4plus.pth", "type": "upscale_model", "family": "unknown"},
+            ],
+            "model_counts": {}, "sd15": {}, "upscale": {"ready": True, "models": []},
+        }
+        with patch("app.main.client") as client_factory:
+            client_factory.return_value.diagnostics = AsyncMock(return_value=report)
+            response = TestClient(app).get("/api/diagnostics")
+        self.assertEqual(response.status_code, 200)
+        result = response.json()
+        self.assertEqual(result["model_counts"]["upscale_models"], 1)
+        self.assertEqual(result["sd15"]["checkpoint_count"], 1)
+        self.assertEqual(result["sd15"]["unclassified_checkpoint_names"], ["unclassified.safetensors"])
+
+    def test_comfy_models_endpoint_uses_parent_api_inventory(self):
+        parent_models = [{"name": "4x-parent.pth", "comfy_name": "4x-parent.pth", "type": "upscale_model", "recognized": True}]
+        with patch("app.main.client") as client_factory, patch("app.main.scan_current_models", new=AsyncMock()) as local_scan:
+            client_factory.return_value.available_models = AsyncMock(return_value=parent_models)
+            response = TestClient(app).get("/api/comfy/models")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), parent_models)
+        client_factory.return_value.available_models.assert_awaited_once()
+        local_scan.assert_not_awaited()
+
 
 if __name__ == "__main__":
     unittest.main()

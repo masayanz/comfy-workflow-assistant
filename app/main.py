@@ -111,6 +111,29 @@ async def resolve_model(name: str) -> dict:
 
 async def resolve_workflow_target(payload: WorkflowBuildRequest, *, require_flux_assets: bool = False):
     """Resolve a checkpoint profile or validate Flux split-model assets."""
+    if payload.generation_type == "upscale":
+        if not payload.upscale_model:
+            raise HTTPException(status_code=400, detail="Upscale Modelを選択してください。")
+        comfy = client()
+        if not (await comfy.status())["online"]:
+            raise HTTPException(status_code=503, detail="ComfyUIに接続できないため、Upscale Modelを確認できません。")
+        try:
+            model = next((item for item in await comfy.available_models()
+                          if item["type"] == "upscale_model"
+                          and item.get("comfy_name", item["name"]) == payload.upscale_model), None)
+            if not model:
+                raise HTTPException(status_code=400, detail="選択したUpscale Modelが親機ComfyUIに見つかりません。models/upscale_modelsへ配置後、再スキャンしてください。")
+            missing_nodes = [name for name in ("LoadImage", "UpscaleModelLoader", "ImageUpscaleWithModel", "SaveImage")
+                             if not await comfy.object_info(name)]
+            if missing_nodes:
+                raise HTTPException(status_code=400, detail="親機ComfyUIにUpscale用ノードがありません: " + "、".join(missing_nodes))
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.exception("親機ComfyUIのUpscale Modelを検証できませんでした")
+            raise HTTPException(status_code=502, detail="親機ComfyUIからUpscale Model一覧を取得できません。接続とComfyUIログを確認してください。") from exc
+        return "upscale", model, True, []
+
     requested_profile = payload.profile_id
     if requested_profile == "flux":
         try:
@@ -159,7 +182,8 @@ def resolve_workflow_input(payload: WorkflowBuildRequest) -> dict | None:
             raise HTTPException(status_code=400, detail="txt2imgでは入力画像を指定できません。")
         return None
     if not payload.input_image_id:
-        raise HTTPException(status_code=400, detail="img2imgには入力画像が必要です。画像をアップロードしてください。")
+        label = "upscale" if payload.generation_type == "upscale" else "img2img"
+        raise HTTPException(status_code=400, detail=f"{label}には入力画像が必要です。画像をアップロードしてください。")
     now = time.time()
     for upload_id in [key for key, value in _uploaded_images.items() if now - value["created_at"] > UPLOAD_TTL_SECONDS]:
         _uploaded_images.pop(upload_id, None)
@@ -300,6 +324,36 @@ async def app_status():
     }
 
 
+@app.get("/api/diagnostics")
+async def diagnostics():
+    try:
+        result = await client().diagnostics()
+        if not result.get("online"):
+            return result
+        models = apply_model_overrides(result.get("models", []))
+        result["models"] = models
+        counts = result.setdefault("model_counts", {})
+        for label, kind in {
+            "checkpoints": "checkpoint", "loras": "lora", "vae": "vae",
+            "diffusion_models": "diffusion_model", "text_encoders": "text_encoder",
+            "upscale_models": "upscale_model", "controlnet": "controlnet",
+        }.items():
+            counts[label] = sum(item.get("type") == kind for item in models)
+        checkpoints = [item for item in models if item.get("type") == "checkpoint"]
+        sd15 = result.setdefault("sd15", {})
+        sd15_models = [item for item in checkpoints if item.get("family") == "sd15"]
+        sd15["checkpoint_count"] = len(sd15_models)
+        sd15["checkpoints"] = [item["name"] for item in sd15_models]
+        sd15["unclassified_checkpoint_names"] = [
+            item["name"] for item in checkpoints
+            if item.get("family") == "unknown" and item.get("metadata_role") != "lora"
+        ]
+        return result
+    except Exception as exc:
+        logger.exception("親機ComfyUI診断を取得できませんでした")
+        raise HTTPException(status_code=502, detail="ComfyUI診断情報を取得できません。接続とComfyUIログを確認してください。") from exc
+
+
 @app.get("/api/comfy/status")
 async def comfy_status():
     return await client().status()
@@ -308,6 +362,16 @@ async def comfy_status():
 @app.get("/api/models")
 async def models():
     return await scan_current_models()
+
+
+@app.get("/api/comfy/models")
+async def comfy_models():
+    """Return models recognized by the configured parent ComfyUI API."""
+    try:
+        return apply_model_overrides(await client().available_models())
+    except Exception as exc:
+        logger.exception("親機ComfyUIからモデル一覧を取得できませんでした")
+        raise HTTPException(status_code=502, detail="親機ComfyUIから認識済みモデル一覧を取得できません。接続とComfyUIログを確認してください。") from exc
 
 
 @app.post("/api/uploads/image")
@@ -423,7 +487,7 @@ async def save_workflow(payload: WorkflowBuildRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    slug = re.sub(r"[^a-zA-Z0-9_-]+", "_", Path(payload.model or payload.diffusion_model or family).stem)[:40] or "workflow"
+    slug = re.sub(r"[^a-zA-Z0-9_-]+", "_", Path(payload.model or payload.diffusion_model or payload.upscale_model or family).stem)[:40] or "workflow"
     filename = f"{stamp}_{family}_{payload.generation_type}_{slug}.api.json"
     target = OUTPUT_DIR / filename
     target.write_text(json.dumps(workflow, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -444,7 +508,7 @@ async def save_ui_workflow(payload: WorkflowBuildRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    slug = re.sub(r"[^a-zA-Z0-9_-]+", "_", Path(payload.model or payload.diffusion_model or family).stem)[:40] or "workflow"
+    slug = re.sub(r"[^a-zA-Z0-9_-]+", "_", Path(payload.model or payload.diffusion_model or payload.upscale_model or family).stem)[:40] or "workflow"
     filename = f"{stamp}_{payload.generation_type}_{slug}.workflow.json"
     target = OUTPUT_DIR / filename
     target.write_text(json.dumps(workflow, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -474,19 +538,19 @@ async def run_workflow(payload: WorkflowBuildRequest):
     try:
         workflow = build_workflow(payload, family, input_image["comfy_name"] if input_image else None)
         comfy = client()
-        sampler_node = next(node for node in workflow.values() if node["class_type"] == "KSampler")
-        seed = sampler_node["inputs"]["seed"]
+        sampler_node = next((node for node in workflow.values() if node["class_type"] == "KSampler"), None)
+        seed = sampler_node["inputs"]["seed"] if sampler_node else None
         logger.info(
             "Sending workflow type=%s model=%s seed=%s size=%sx%s steps=%s cfg=%s sampler=%s denoise=%s input_image=%s lora=%s workflow=%s",
             payload.generation_type,
-            payload.model or payload.diffusion_model or family, seed, payload.width, payload.height,
+            payload.model or payload.diffusion_model or payload.upscale_model or family, seed, payload.width, payload.height,
             payload.steps, payload.cfg, payload.sampler, payload.denoise, input_image["comfy_name"] if input_image else None, payload.lora, workflow,
         )
         prompt_id = await comfy.queue(workflow)
         logger.info(
             "Workflow queued prompt_id=%s type=%s model=%s seed=%s size=%sx%s steps=%s cfg=%s sampler=%s denoise=%s input_image=%s lora=%s",
             prompt_id, payload.generation_type,
-            payload.model or payload.diffusion_model or family, seed, payload.width, payload.height,
+            payload.model or payload.diffusion_model or payload.upscale_model or family, seed, payload.width, payload.height,
             payload.steps, payload.cfg, payload.sampler, payload.denoise, input_image["comfy_name"] if input_image else None, payload.lora,
         )
     except ValueError as exc:
@@ -496,6 +560,8 @@ async def run_workflow(payload: WorkflowBuildRequest):
         response_text = exc.response.text.lower()
         if "ckpt_name" in response_text or "checkpoint" in response_text:
             detail = "ComfyUIでCheckpointが見つかりません。モデル一覧を再スキャンしてください。"
+        elif "upscalemodelloader" in response_text or "model_name" in response_text or "upscale model" in response_text:
+            detail = "選択したUpscale Modelが親機ComfyUIから見つかりません。models/upscale_modelsへ配置後、モデルを再スキャンしてください。"
         elif any(token in response_text for token in ("unet_name", "diffusion model", "dualcliploader", "clip_name1", "clip_name2")):
             detail = "FluxのUNETまたはText EncoderがComfyUIから見つかりません。選択したFluxモデルを確認してください。"
         elif "vae_name" in response_text:
@@ -513,6 +579,10 @@ async def run_workflow(payload: WorkflowBuildRequest):
         "prompt_id": prompt_id, "status": "QUEUED", "seed": seed,
         "generation_type": payload.generation_type,
         "input_image": {key: input_image[key] for key in ("name", "width", "height")} if input_image else None,
+        "upscale_model": model.get("name") if family == "upscale" else None,
+        "upscale_scale": model.get("scale") if family == "upscale" else None,
+        "estimated_output_size": ({"width": input_image["width"] * model["scale"], "height": input_image["height"] * model["scale"]}
+                                  if family == "upscale" and model.get("scale") else None),
     }
 
 
@@ -528,6 +598,8 @@ async def workflow_status(prompt_id: str):
         detail = json.dumps(errors, ensure_ascii=False).lower()
         if "ckpt_name" in detail or "checkpoint" in detail:
             message = "ComfyUIでCheckpointが見つかりません。選択したモデルを確認してください。"
+        elif "upscalemodelloader" in detail or "imageupscalewithmodel" in detail:
+            message = "Upscale Modelの読み込みまたは画像拡大に失敗しました。モデルの配置とVRAMを確認してください。"
         elif any(token in detail for token in ("unetloader", "dualcliploader", "fluxguidance", "unet_name", "clip_name1", "clip_name2")):
             message = "FluxのUNETまたはText Encoderでエラーが発生しました。Flux用モデルと接続を確認してください。"
         elif "vaeloader" in detail or "vae_name" in detail:

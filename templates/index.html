@@ -9,7 +9,7 @@
 <body>
   <header class="topbar">
     <div class="brand"><span class="brand-mark">C</span><div><strong>Comfy Workflow Builder</strong><small>ComfyUI workflow assistant</small></div></div>
-    <div class="connection"><span class="status-dot" id="status-dot"></span><span id="status-label">接続を確認中</span><button class="icon-button" id="settings-open" aria-label="設定">⚙</button></div>
+    <div class="connection"><span class="status-dot" id="status-dot"></span><span id="status-label">接続を確認中</span><button class="text-button" id="diagnostics-open" type="button">環境診断</button><button class="icon-button" id="settings-open" aria-label="設定">⚙</button></div>
   </header>
   <main class="layout">
     <aside class="panel model-panel">
@@ -22,12 +22,15 @@
 
     <section class="panel builder-panel">
       <div class="section-heading"><div><p class="eyebrow">STEP 02</p><h2>ワークフローを作成</h2></div><span class="mode-tag" id="generation-type-label">TXT2IMG</span></div>
-      <label class="field-label" for="prompt">作りたいもの <span class="required">必須</span></label>
-      <textarea id="prompt" rows="4" placeholder="例：自然な日本人女性のポートレート、柔らかな自然光"></textarea>
+      <div id="prompt-fields">
+        <label class="field-label" for="prompt">作りたいもの <span class="required">必須</span></label>
+        <textarea id="prompt" rows="4" placeholder="例：自然な日本人女性のポートレート、柔らかな自然光"></textarea>
+      </div>
       <div class="generation-mode" id="generation-mode">
         <span class="field-label">生成方式</span>
         <label><input type="radio" name="generation_type" value="txt2img" checked> Text to Image</label>
         <label><input type="radio" name="generation_type" value="img2img" disabled> Image to Image</label>
+        <label><input type="radio" name="generation_type" value="upscale"> Upscale</label>
       </div>
       <section id="image-input-section" class="image-input-section hidden">
         <label class="field-label" for="input-image-file">入力画像 <span class="required">必須</span></label>
@@ -43,8 +46,14 @@
           <input id="denoise" type="range" min="0" max="1" step="0.05" value="0.5">
           <div class="denoise-hints"><span>0.2 元画像を強く維持</span><span>0.5 中程度の変化</span><span>0.8 大きく変化</span></div>
         </div>
+        <div id="upscale-options" class="upscale-options hidden">
+          <label class="field-label" for="upscale-model">Upscale Model</label>
+          <select id="upscale-model"><option value="">ComfyUIから一覧を取得しています…</option></select>
+          <p id="upscale-estimate" class="help-text">入力画像を選ぶと予想出力サイズを表示します。</p>
+        </div>
       </section>
       <div id="model-components" class="model-components hidden"></div>
+      <div id="generation-settings">
       <details class="advanced" open><summary>生成設定</summary>
         <div class="field-grid resolution-grid" id="resolution-grid"><label class="field-label">解像度<select id="resolution"><option value="" selected disabled>モデルProfileから設定</option><option value="512,512">512 × 512</option><option value="768,768">768 × 768</option><option value="1024,1024">1024 × 1024</option><option value="832,1216">832 × 1216</option><option value="1024,1536">1024 × 1536</option><option value="custom">カスタム</option></select></label><div id="custom-size" class="custom-size hidden"><label>幅<input id="width" type="number" min="64" max="4096" step="64"></label><label>高さ<input id="height" type="number" min="64" max="4096" step="64"></label></div></div>
         <div class="field-grid three"><label class="field-label">Steps<input id="steps" type="number" min="1" max="150" placeholder="Profileから設定"></label><label class="field-label" id="cfg-field">CFG<input id="cfg" type="number" min="0" max="50" step="0.5" placeholder="Profileから設定"></label><label class="field-label">Sampler<select id="sampler"><option value="" selected disabled>Profileから設定</option><option>euler</option><option>dpmpp_2m</option><option>dpmpp_2m_sde</option><option>euler_ancestral</option><option>uni_pc</option></select></label></div>
@@ -53,6 +62,7 @@
         <div id="negative-field"><label class="field-label" for="negative">Negative Prompt <span class="optional">任意</span></label><textarea id="negative" rows="2" placeholder="避けたい要素を入力"></textarea></div>
       </details>
       <details class="lora-options"><summary>LoRAを使う <span class="optional">任意</span></summary><div class="field-grid two"><label class="field-label">LoRA<select id="lora"><option value="">使わない</option></select></label><label class="field-label">Weight<input id="lora-weight" type="number" min="-2" max="2" step="0.05" value="0.8"></label></div></details>
+      </div>
       <div class="actions"><button id="build-button" class="button secondary">Workflow生成</button><button id="save-ui-button" class="button primary">ComfyUI Workflowを保存</button><button id="save-api-button" class="button secondary">API Promptを保存</button><button id="run-button" class="button primary">▶ ComfyUIで生成</button></div>
       <div id="message" class="message hidden" role="status"></div>
     </section>
@@ -68,6 +78,7 @@
     </aside>
   </main>
   <dialog id="settings-dialog"><form method="dialog" id="settings-form"><div class="section-heading"><div><p class="eyebrow">SETTINGS</p><h2>接続設定</h2></div><button class="icon-button" value="cancel" aria-label="閉じる">×</button></div><label class="field-label">ComfyUI API URL<input id="comfy-url" type="url" value="http://127.0.0.1:8188"></label><label class="field-label">ComfyUIルートフォルダ<input id="comfy-path" type="text" placeholder="例：C:\\ComfyUI（自動検出時は空欄）"></label><div class="dialog-field-row"><label class="field-label">Web UIポート<input id="web-port" type="number" min="1024" max="65535" value="7865"></label><label class="check-label"><input id="open-browser" type="checkbox" checked>起動時にブラウザを開く</label></div><p class="help-text">ルートフォルダには models フォルダが必要です。ポートの変更はアプリを再起動すると反映されます。Stability Matrixの場合もComfyUIパッケージのフォルダを指定してください。</p><div class="dialog-actions"><button class="button secondary" value="cancel">キャンセル</button><button class="button primary" id="settings-save" value="save">保存して再スキャン</button></div></form></dialog>
+  <dialog id="diagnostics-dialog" class="diagnostics-dialog"><div class="section-heading"><div><p class="eyebrow">ENVIRONMENT</p><h2>親機ComfyUI診断</h2></div><button class="icon-button" id="diagnostics-close" type="button" aria-label="閉じる">×</button></div><div class="diagnostics-actions"><button class="button secondary" id="diagnostics-refresh" type="button">再取得</button><span id="diagnostics-status" class="help-text"></span></div><div id="diagnostics-content" class="diagnostics-content"><div class="empty-state">ComfyUIへ問い合わせています…</div></div></dialog>
   <script src="/static/js/app.js" defer></script>
 </body>
 </html>

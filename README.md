@@ -6,23 +6,26 @@ ComfyUI初心者から初級・中級ユーザー向けの、ローカルで動�
 
 - Windows 11を想定した起動スクリプト
 - ComfyUI APIの接続状態表示
-- Checkpoint、LoRA、VAE、ControlNet、upscale modelのローカルスキャン
+- Checkpoint、LoRA、VAE、ControlNetなどのモデル一覧取得と系統分類
+- Upscale Modelの選択には、親機ComfyUI APIが認識するモデル一覧を使用
 - ComfyUIのファイルシステムにアクセスできない場合は `/object_info` から利用可能モデル一覧を取得
 - ファイル名・保存先を使ったSD1.5 / SDXL / Fluxの簡易分類
 - 推定できなかったモデル系統の手動修正と保存
-- SD1.5 / SDXL txt2imgとSDXL img2img workflowの生成、JSON保存、ComfyUI実行、生成画像表示
-- SD1.5 / SDXL txt2imgとSDXL img2imgのComfyUIキャンバス用Workflow JSON保存（API Promptとは別形式）
+- SD1.5 / SDXL txt2img、SDXL img2img、画像アップスケールのWorkflow生成、JSON保存、ComfyUI実行、生成画像表示
+- 上記WorkflowのComfyUIキャンバス用JSON保存（API Promptとは別形式）
 - 1つまでのLoRA選択と適用強度の調整
 - `model_profiles/` で管理するモデル別デフォルト値と対応機能
 - ComfyUIルートフォルダとAPI URLの設定
 
-現在、ComfyUIで実行できるworkflowはSD1.5 / SDXL txt2imgとSDXL img2imgです。LoRAはSD1.5 / SDXLで1つ適用できます。Flux txt2imgの構成生成は対応していますが、実機モデル不足のため実生成は未確認です。FluxのLoRA/img2img、SD1.5 img2img、upscale、複数LoRA、生成履歴は未対応です。モデル分類はファイル名と保存先による推定なので、判定が「不明」になることがあります。
+現在、SD1.5 / SDXL txt2img、SDXL img2img、標準の`LoadImage → UpscaleModelLoader → ImageUpscaleWithModel → SaveImage`によるアップスケールWorkflowの生成と実行に対応しています。アップスケールの実行には親機ComfyUIが認識するUpscale Modelが必要です。LoRAはSD1.5 / SDXLで1つ適用できます。Flux txt2imgの構成生成は対応していますが、実機モデル不足のため実生成は未確認です。FluxのLoRA/img2img、SD1.5 img2img、複数LoRA、生成履歴は未対応です。モデル分類はファイル名と保存先による推定なので、判定が「不明」になることがあります。
 
-Workflow生成時は、ComfyUIキャンバスに読み込んで編集する `.workflow.json` と、ComfyUI APIへ送信する `.api.json` を別々に保存できます。UI Workflow JSONの保存はSD1.5 / SDXL txt2imgとSDXL img2imgに対応しています。どちらも`generated_workflows/`に保存され、ブラウザにもダウンロードされます。
+アップスケール用モデルはアプリを動かすPC上のファイルではなく、接続先の親機ComfyUIが`/models/upscale_models`で認識したものだけを使います。Web UIの「親機ComfyUI診断」ではComfyUIのバージョン、GPU、実際のモデル保存先、モデル在庫、必要ノード、登録済みCustom Nodeを確認できます。親機にUpscale Modelがない場合、診断画面に表示されるパスへ配置してください。Stability Matrixの親機向けに、SHA-256を確認し、同名ファイルを上書きしない導入スクリプトを`scripts/Install-RealESRGAN-On-Parent.ps1`に用意しています。親機が別PCの場合はスクリプトを親機へコピーして、親機のPowerShellから手動で実行します。
+
+Workflow生成時は、ComfyUIキャンバスに読み込んで編集する `.workflow.json` と、ComfyUI APIへ送信する `.api.json` を別々に保存できます。どちらも`generated_workflows/`に保存され、ブラウザにもダウンロードされます。
 
 SD1.5、SDXL、Fluxの解像度・Steps・CFG・Sampler・Schedulerの既定値は `model_profiles/` のJSONで管理します。Flux ProfileはUNET、2つのText Encoder、VAEを個別に選択します。必要なFluxモデルがComfyUIにない場合もAPI PromptとUI Workflowの未設定プレビューを作れますが、保存とQueue実行は必要なモデルが揃うまで無効です。CheckpointまたはProfileを選ぶとBackendから設定を読み込み、画面へ反映します。
 
-SDXL img2imgではPNG / JPEG / WEBP（20MB以下）の入力画像を1枚アップロードします。画像本体はComfyUIの`input/`直下へUUID名で送り、WorkflowはComfyUIの`LoadImage`から参照します。ComfyUIのキャンバスUIでも画像を選択できる配置にしています。ローカル接続でComfyUIルートを確認できる場合、アプリ画面を開いた際または次回アップロード時に、アプリ専用の命名規則に合う30日以上前の画像だけを削除します。リモートComfyUIには標準の画像削除APIがないため、期限を過ぎたファイルもComfyUI側に残ります。不要な画像はComfyUIのinputフォルダから整理してください。
+SDXL img2imgとアップスケールではPNG / JPEG / WEBP（20MB以下）の入力画像を1枚アップロードします。画像本体はComfyUIの`input/`直下へUUID名で送り、WorkflowはComfyUIの`LoadImage`から参照します。アップスケールの出力サイズは生成後の画像から表示します。事前の倍率はモデル名から推定できる場合のみ参考表示します。ローカル接続でComfyUIルートを確認できる場合、アプリ画面を開いた際または次回アップロード時に、アプリ専用の命名規則に合う30日以上前の画像だけを削除します。リモートComfyUIには標準の画像削除APIがないため、期限を過ぎたファイルもComfyUI側に残ります。不要な画像はComfyUIのinputフォルダから整理してください。
 
 ## 必要環境
 
@@ -52,7 +55,7 @@ ComfyUIは既定で `http://127.0.0.1:8188` に接続します。自動検出さ
 
 Image to Imageを選び、画像をアップロードすると、入力画像のサイズをそのまま使います。「変化の強さ」は`denoise`（0.0〜1.0）で、低いほど元画像に近い結果になります。
 
-ComfyUI側にSDXL用の標準ノード（CheckpointLoaderSimple、CLIPTextEncode、EmptyLatentImage、KSampler、VAEDecode、SaveImage）が必要です。独自ノードを使うworkflowは現在対象外です。
+ComfyUI側に各Workflowで使う標準ノードが必要です。Upscaleでは`LoadImage`、`UpscaleModelLoader`、`ImageUpscaleWithModel`、`SaveImage`を確認します。独自ノードを使うWorkflowは現在対象外です。
 
 `.api.json`はComfyUI APIへ送るPrompt形式、`.workflow.json`はComfyUIのグラフ画面で読み込んで編集する形式です。2種類のJSONはWorkflowDefinitionから別々に生成します。
 
@@ -70,7 +73,9 @@ Web UIポートと起動時のブラウザ表示も設定できます。ポー�
 
 - `GET /api/status`
 - `GET /api/comfy/status`
-- `GET /api/models` / `POST /api/models/scan`
+- `GET /api/comfy/models`（親機ComfyUIの認識一覧）
+- `GET /api/diagnostics`（親機環境・モデル・ノード診断）
+- `GET /api/models` / `POST /api/models/scan`（既存のモデルスキャン）
 - `GET /api/loras`
 - `GET /api/model-profiles` / `GET /api/model-profiles/{id}`
 - `GET /api/settings` / `PUT /api/settings`
