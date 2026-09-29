@@ -7,6 +7,21 @@ from app.services.comfy_client import ComfyClient
 
 
 class ComfyClientTests(unittest.IsolatedAsyncioTestCase):
+    async def test_object_info_catalog_returns_parent_registered_node_types(self):
+        transport = httpx.MockTransport(lambda request: httpx.Response(200, json={
+            "KSampler": {"python_module": "nodes"},
+            "ImpactPackFaceDetailer": {"python_module": "custom_nodes.comfyui-impact-pack"},
+        }))
+        original = httpx.AsyncClient
+
+        def client_factory(*args, **kwargs):
+            return original(*args, **{**kwargs, "transport": transport})
+
+        with patch("app.services.comfy_client.httpx.AsyncClient", side_effect=client_factory):
+            result = await ComfyClient("http://localhost:8188").object_info_catalog()
+        self.assertIn("KSampler", result)
+        self.assertEqual(result["ImpactPackFaceDetailer"]["python_module"], "custom_nodes.comfyui-impact-pack")
+
     async def test_status_reports_online(self):
         transport = httpx.MockTransport(lambda request: httpx.Response(200, json={"system": {}}))
         original = httpx.AsyncClient

@@ -71,6 +71,14 @@
       <div class="section-heading"><div><p class="eyebrow">PREVIEW</p><h2>生成予定</h2></div></div>
       <div class="selected-model" id="selected-model"><span class="model-placeholder">左からCheckpointを選択してください</span></div>
       <div class="workflow-card"><div class="workflow-title"><span>構成</span><span class="tiny-tag" id="model-family-tag">SDXL</span></div><div class="node-flow" id="node-flow"><span>Checkpoint Loader</span><i>↓</i><span>Text Encode × 2</span><i>↓</i><span>Empty Latent Image</span><i>↓</i><span>KSampler</span><i>↓</i><span>VAE Decode</span><i>↓</i><span>Save Image</span></div></div>
+      <section class="workflow-import-card" aria-labelledby="workflow-import-heading">
+        <div class="workflow-title"><span id="workflow-import-heading">既存Workflowを解析</span><span class="tiny-tag">読み込みのみ</span></div>
+        <label class="field-label" for="workflow-import-file">ComfyUI Workflow JSON</label>
+        <input id="workflow-import-file" type="file" accept=".json,application/json">
+        <button id="workflow-import-button" class="button secondary full" type="button">Workflowを読み込んで解析</button>
+        <p class="help-text">JSONを解析するだけで、ComfyUIへ送信・実行しません。最大10MB。</p>
+        <div id="workflow-analysis" class="workflow-analysis hidden" aria-live="polite"></div>
+      </section>
       <details class="json-preview hidden" id="ui-workflow-preview"><summary>ComfyUI Workflow JSONを見る</summary><p class="json-note">ComfyUIキャンバスでノードを読み込み、編集する形式です。</p><pre id="ui-workflow-json"></pre></details>
       <details class="json-preview hidden" id="api-prompt-preview"><summary>API Prompt JSONを見る</summary><p class="json-note">ComfyUI APIへ送信するPrompt形式です。キャンバスへ読み込むWorkflowとは異なります。</p><button id="copy-workflow" class="text-button">コピー</button><pre id="workflow-json"></pre></details>
       <div class="explain">選択したCheckpointからモデル・CLIP・VAEを読み込み、プロンプトと生成設定をKSamplerへ渡します。</div>

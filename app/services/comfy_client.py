@@ -17,6 +17,8 @@ MODEL_FOLDER_TYPES = {
     "lora": ("loras",),
     "vae": ("vae",),
     "controlnet": ("controlnet", "t2i_adapter"),
+    "clip_vision": ("clip_vision",),
+    "ipadapter": ("ipadapter",),
     "upscale_model": ("upscale_models",),
 }
 
@@ -27,6 +29,8 @@ MODEL_LOADER_INPUTS = {
     "lora": ("LoraLoader", ("lora_name",)),
     "vae": ("VAELoader", ("vae_name",)),
     "controlnet": ("ControlNetLoader", ("control_net_name",)),
+    "clip_vision": ("CLIPVisionLoader", ("clip_name",)),
+    "ipadapter": ("IPAdapterModelLoader", ("ipadapter_file",)),
     "upscale_model": ("UpscaleModelLoader", ("model_name",)),
 }
 
@@ -83,6 +87,14 @@ class ComfyClient:
             response = await client.get(urljoin(self.base_url, f"object_info/{node_name}"))
             response.raise_for_status()
             return response.json().get(node_name, {})
+
+    async def object_info_catalog(self) -> dict:
+        """Return the node catalog published by the configured parent ComfyUI."""
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(urljoin(self.base_url, "object_info"))
+            response.raise_for_status()
+            body = response.json()
+        return body if isinstance(body, dict) else {}
 
     async def model_metadata(self, folder: str, filename: str) -> dict:
         async with httpx.AsyncClient(timeout=self.timeout) as client:

@@ -1,8 +1,10 @@
-const state = { models: [], comfyModels: [], profiles: new Map(), loraCompatibility: new Map(), family: 'all', selected: null, activeProfile: null, profileRequest: 0, lastPayload: null, inputImage: null, isRunning: false, comfyOnline: false, diagnostics: null };
+const state = { models: [], comfyModels: [], profiles: new Map(), loraCompatibility: new Map(), family: 'all', selected: null, activeProfile: null, profileRequest: 0, lastPayload: null, inputImage: null, isRunning: false, comfyOnline: false, comfyUrl: '', diagnostics: null, importedWorkflowFile: null };
 const $ = (selector) => document.querySelector(selector);
 
 async function api(path, options = {}) {
-  const response = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...(options.headers || {}) } });
+  const headers = { ...(options.headers || {}) };
+  if (!(options.body instanceof FormData) && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+  const response = await fetch(path, { ...options, headers });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     const detail = body.detail;
@@ -59,6 +61,47 @@ function renderModels() {
 function familyName(family) { return ({ sdxl: 'SDXL', sd15: 'SD1.5', flux: 'Flux', unknown: '不明' })[family] || family; }
 function classificationName(classification = {}) { return `${classification.variant === 'pony' ? 'Pony' : familyName(classification.family || 'unknown')}`; }
 function escapeHtml(value) { return String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]); }
+
+function renderWorkflowAnalysis(data) {
+  const holder = $('#workflow-analysis');
+  const formatLabels = { comfyui_ui_workflow: 'ComfyUI UI Workflow', comfyui_api_prompt: 'ComfyUI API Prompt', unknown: '不明な形式' };
+  const kindLabels = { txt2img: 'txt2img', img2img: 'img2img', upscale: 'Upscale', inpaint: 'inpaint', controlnet: 'ControlNet', mixed: '複合Workflow', unknown: '用途不明' };
+  const assetLabels = { checkpoint: 'Checkpoint', lora: 'LoRA', vae: 'VAE', diffusion_model: 'Diffusion Model / UNET', text_encoder: 'Text Encoder', upscale_model: 'Upscale Model', controlnet: 'ControlNet', clip_vision: 'CLIP Vision', ipadapter: 'IPAdapter' };
+  const familyLabels = { sdxl: 'SDXL', sd15: 'SD1.5', flux: 'Flux', unknown: '不明' };
+  const confidenceLabels = { high: '高', low: '低', unknown: '不明' };
+  const assetStatus = { found: '✓ 利用可能', missing: '✕ 不足', unknown: '? 照合不明' };
+  const nodeStatus = { available: '✓ 登録済み', missing: '✕ 不足', unknown: '? 照合不明' };
+  const compatibilityLabel = { compatible: '互換性あり', compatible_with_warning: '要確認', incompatible: '非互換', unknown: '不明' };
+  const modelRows = (data.models || []).map((item) => `<li><span>${escapeHtml(assetLabels[item.type] || item.type)} · ${escapeHtml(item.name)}${item.family && item.family !== 'unknown' ? `<br><small>${escapeHtml(familyLabels[item.family] || item.family)}${item.classification?.variant === 'pony' ? ' / Pony' : ''} · 確度 ${escapeHtml(confidenceLabels[item.classification?.confidence] || '不明')}</small>` : ''}</span><small class="analysis-state ${escapeHtml(item.status)}">${assetStatus[item.status] || '不明'}</small></li>`).join('');
+  const nodeRows = (data.nodes || []).slice(0, 80).map((node) => `<li><span>${escapeHtml(node.title || node.type)} <small>(${escapeHtml(node.type)} · ID ${escapeHtml(node.id)})</small></span><small class="analysis-state ${escapeHtml(node.availability)}">${nodeStatus[node.availability] || ''}</small></li>`).join('');
+  const compatibilityRows = (data.compatibility || []).map((item) => `<li><span>${escapeHtml(item.checkpoint)} + ${escapeHtml(item.lora)}<br><small>${escapeHtml(item.message || '')}</small></span><small class="analysis-state ${escapeHtml(item.status)}">${compatibilityLabel[item.status] || '不明'}</small></li>`).join('');
+  const missingNodeRows = (data.missing_nodes || []).map((node) => `<li><span>${escapeHtml(node.type)} · ID ${escapeHtml(node.node_id)}</span><small class="analysis-state missing">不足</small></li>`).join('');
+  const customRows = (data.custom_nodes || []).map((node) => `<li><span>${escapeHtml(node.type)} · ID ${escapeHtml(node.node_id)}</span><small class="analysis-state ${escapeHtml(node.status)}">${nodeStatus[node.status] || '不明'}</small></li>`).join('');
+  const unknownRows = (data.unknown_nodes || []).map((node) => `<li><span>${escapeHtml(node.type)} · ID ${escapeHtml(node.node_id)}</span><small class="analysis-state ${escapeHtml(node.status)}">解析対象外</small></li>`).join('');
+  const warningRows = (data.warnings || []).map((warning) => `<li>${escapeHtml(warning)}</li>`).join('');
+  const flowRows = (data.flow || []).map((item) => `<li>${escapeHtml(item.title || item.type)}${item.from?.length ? ` ← ${escapeHtml(item.from.join(', '))}` : ''}</li>`).join('');
+  const parameters = JSON.stringify(data.parameters || {}, null, 2);
+  const inventoryStatus = data.comfy_online === null ? '形式不明のため親機照合なし' : data.comfy_online ? '親ComfyUIに接続中' : '親ComfyUIに接続できず、在庫照合は不明';
+  holder.innerHTML = `
+    <div class="analysis-summary"><strong>${escapeHtml(data.summary?.title || 'Workflowを解析しました。')}</strong>
+      <div>形式: ${escapeHtml(formatLabels[data.workflow_type] || data.workflow_type)} · 用途: ${escapeHtml(kindLabels[data.generation_type] || data.generation_type)}</div>
+      <div>Nodes: ${Number(data.node_count) || 0} · Links: ${Number(data.link_count) || 0}</div>
+      <div>${escapeHtml(inventoryStatus)}</div></div>
+    ${data.summary?.steps?.length ? `<section><h4>処理の概要</h4><ol>${data.summary.steps.map((step) => `<li>${escapeHtml(step)}</li>`).join('')}</ol></section>` : ''}
+    <section><h4>使用モデル</h4>${modelRows ? `<ul class="analysis-list">${modelRows}</ul>` : '<p>モデル参照を検出しませんでした。</p>'}</section>
+    ${compatibilityRows ? `<section><h4>Checkpoint / LoRA互換性</h4><ul class="analysis-list">${compatibilityRows}</ul></section>` : ''}
+    ${missingNodeRows ? `<section><h4>親ComfyUIにないノード</h4><ul class="analysis-list">${missingNodeRows}</ul></section>` : ''}
+    ${customRows ? `<section><h4>Custom Node</h4><ul class="analysis-list">${customRows}</ul></section>` : ''}
+    ${unknownRows ? `<section><h4>解析対象外のノード</h4><ul class="analysis-list">${unknownRows}</ul></section>` : ''}
+    <section><h4>ノード一覧</h4><ul class="analysis-list">${nodeRows || '<li>ノードがありません。</li>'}</ul>${data.node_count > 80 ? `<p>先頭80件を表示しました（全${Number(data.node_count)}件）。</p>` : ''}</section>
+    ${flowRows ? `<section><h4>簡易フロー</h4><ol>${flowRows}</ol></section>` : ''}
+    <details><summary>認識した生成パラメータ</summary><pre>${escapeHtml(parameters)}</pre></details>
+    ${data.vram_warnings?.length ? `<section><h4>RTX 3060 12GB向け注意</h4><ul class="analysis-list">${data.vram_warnings.map((item) => `<li class="analysis-warning">${escapeHtml(item)}</li>`).join('')}</ul><p>VRAM使用量の数値予測ではありません。</p></section>` : ''}
+    ${warningRows ? `<section><h4>確認事項</h4><ul class="analysis-list">${warningRows}</ul></section>` : ''}
+    <div class="analysis-actions"><button class="button secondary analysis-download" type="button">読み込んだJSONをダウンロード</button><button class="button secondary analysis-open-comfy" type="button" ${state.comfyUrl ? '' : 'disabled'}>ComfyUIを開く</button><button class="button secondary analysis-open-diagnostics" type="button">環境診断を開く</button></div>
+    <p class="help-text">解析のみ実行しました。Queueへの送信やWorkflowの変更は行っていません。ComfyUIで編集する場合は、キャンバスのWorkflow読み込みからJSONを選択してください。</p>`;
+  holder.classList.remove('hidden');
+}
 
 function loraCompatibilityLabel(status) {
   return ({ compatible: '互換', compatible_with_warning: '要確認', incompatible: '非互換', unknown: 'Unknown / 要確認' })[status] || '未判定 / 要確認';
@@ -417,6 +460,7 @@ async function refresh() {
     state.models = models;
     state.comfyModels = comfyModels;
     state.comfyOnline = Boolean(status.comfy.online);
+    state.comfyUrl = status.settings?.comfy_url || '';
     state.profiles = new Map(profiles.map((profile) => [profile.id, profile]));
     renderFamilyFilters();
     renderLoraOptions();
@@ -668,4 +712,50 @@ async function saveWorkflow(endpoint, button, label) {
 }
 $('#save-ui-button').addEventListener('click', (event) => saveWorkflow('/api/workflow/save-ui', event.currentTarget, 'ComfyUI Workflow'));
 $('#save-api-button').addEventListener('click', (event) => saveWorkflow('/api/workflow/save', event.currentTarget, 'API Prompt'));
+$('#workflow-import-file').addEventListener('change', () => {
+  state.importedWorkflowFile = null;
+  $('#workflow-analysis').classList.add('hidden');
+  $('#workflow-analysis').replaceChildren();
+});
+$('#workflow-import-button').addEventListener('click', async (event) => {
+  const button = event.currentTarget;
+  const file = $('#workflow-import-file').files?.[0];
+  if (!file) { showMessage('解析するComfyUI Workflow JSONを選択してください。', 'error'); return; }
+  if (!file.name.toLowerCase().endsWith('.json')) { showMessage('JSONファイルを選択してください。', 'error'); return; }
+  if (file.size > 10 * 1024 * 1024) { showMessage('Workflow JSONは10MB以下にしてください。', 'error'); return; }
+  $('#workflow-analysis').classList.add('hidden');
+  $('#workflow-analysis').replaceChildren();
+  button.disabled = true;
+  button.textContent = '親ComfyUIと照合中…';
+  try {
+    const form = new FormData();
+    form.append('file', file, file.name);
+    const result = await api('/api/workflow/import', { method: 'POST', body: form });
+    state.importedWorkflowFile = file;
+    renderWorkflowAnalysis(result);
+    showMessage('Workflowの読み込みと解析が完了しました。Queueへは送信していません。', result.valid ? 'success' : 'info');
+  } catch (error) {
+    showMessage(error.message, 'error');
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Workflowを読み込んで解析';
+  }
+});
+$('#workflow-analysis').addEventListener('click', (event) => {
+  if (event.target.closest('.analysis-download')) {
+    if (!state.importedWorkflowFile) return;
+    const url = URL.createObjectURL(state.importedWorkflowFile);
+    const link = document.createElement('a');
+    link.href = url; link.download = state.importedWorkflowFile.name; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  if (event.target.closest('.analysis-open-comfy')) {
+    if (!/^https?:\/\//i.test(state.comfyUrl)) { showMessage('ComfyUI URLを設定してください。', 'error'); return; }
+    window.open(state.comfyUrl, '_blank', 'noopener,noreferrer');
+  }
+  if (event.target.closest('.analysis-open-diagnostics')) {
+    $('#diagnostics-dialog').showModal();
+    loadDiagnostics();
+  }
+});
 refresh();

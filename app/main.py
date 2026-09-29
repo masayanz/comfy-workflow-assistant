@@ -24,6 +24,7 @@ from app.services.model_scanner import custom_node_count, find_comfy_root
 from app.services.model_metadata import classify_asset, classify_compatibility
 from app.services.model_profile_service import ModelProfileService
 from app.services.settings import get_settings, save_settings
+from app.services.workflow_analyzer import analyze_workflow_json
 from app.services.workflow_builder import build_definition, build_workflow, to_api_prompt, to_ui_workflow
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,6 +46,7 @@ _models_cache_url = ""
 _models_cache_lock = asyncio.Lock()
 MODEL_CACHE_TTL_SECONDS = 15
 MAX_IMAGE_UPLOAD_BYTES = 20 * 1024 * 1024
+MAX_WORKFLOW_IMPORT_BYTES = 10 * 1024 * 1024
 MAX_IMAGE_PIXELS = 64_000_000
 UPLOAD_TTL_SECONDS = 30 * 24 * 60 * 60
 COMFY_UPLOAD_SUBFOLDER = ""
@@ -59,11 +61,15 @@ IMAGE_FORMATS = {
 
 
 @app.middleware("http")
-async def limit_image_upload_request(request, call_next):
+async def limit_upload_request_body(request, call_next):
     if request.url.path == "/api/uploads/image":
         content_length = request.headers.get("content-length")
         if content_length and content_length.isdigit() and int(content_length) > MAX_IMAGE_UPLOAD_BYTES + 65_536:
             return JSONResponse(status_code=413, content={"detail": "画像ファイルは20MB以下にしてください。"})
+    if request.url.path == "/api/workflow/import":
+        content_length = request.headers.get("content-length")
+        if content_length and content_length.isdigit() and int(content_length) > MAX_WORKFLOW_IMPORT_BYTES + 65_536:
+            return JSONResponse(status_code=413, content={"detail": "Workflow JSONは10MB以下にしてください。"})
     return await call_next(request)
 
 
@@ -611,6 +617,50 @@ async def download_workflow(filename: str):
     if not path.is_file():
         raise HTTPException(status_code=404, detail="保存したworkflowが見つかりません。")
     return FileResponse(path, filename=filename, media_type="application/json")
+
+
+@app.post("/api/workflow/import")
+async def import_workflow(file: UploadFile = File(...)):
+    """Analyze a JSON workflow without saving it or sending it to ComfyUI."""
+    try:
+        filename = ntpath.basename((file.filename or "workflow.json").replace("/", "\\"))
+        filename = "".join(character for character in filename if ord(character) >= 32 and ord(character) != 127)[:255] or "workflow.json"
+        if Path(filename).suffix.lower() != ".json":
+            raise HTTPException(status_code=415, detail="ComfyUI WorkflowのJSONファイルを選択してください。")
+        raw = await file.read(MAX_WORKFLOW_IMPORT_BYTES + 1)
+        if len(raw) > MAX_WORKFLOW_IMPORT_BYTES:
+            raise HTTPException(status_code=413, detail="Workflow JSONは10MB以下にしてください。")
+
+        try:
+            result = analyze_workflow_json(raw)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        comfy_online = None
+        if result.get("workflow_type") in {"comfyui_ui_workflow", "comfyui_api_prompt"}:
+            inventory = None
+            node_catalog = None
+            comfy = client()
+            status = await comfy.status()
+            comfy_online = bool(status.get("online"))
+            if comfy_online:
+                model_result, catalog_result = await asyncio.gather(
+                    parent_model_inventory(), comfy.object_info_catalog(), return_exceptions=True,
+                )
+                if isinstance(model_result, Exception):
+                    logger.warning("Workflow import could not read parent model inventory: %s", model_result)
+                else:
+                    inventory = apply_model_overrides([dict(item) for item in model_result])
+                if isinstance(catalog_result, Exception):
+                    logger.warning("Workflow import could not read parent object_info: %s", catalog_result)
+                else:
+                    node_catalog = catalog_result
+            result = analyze_workflow_json(raw, inventory=inventory, node_catalog=node_catalog, vram_gb=12.0)
+        result["filename"] = filename
+        result["comfy_online"] = comfy_online
+        logger.info("Workflow JSONを解析しました: name=%s type=%s nodes=%d links=%d", filename, result["workflow_type"], result["node_count"], result["link_count"])
+        return result
+    finally:
+        await file.close()
 
 
 @app.post("/api/workflow/run")

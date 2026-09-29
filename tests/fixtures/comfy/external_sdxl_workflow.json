@@ -1,0 +1,89 @@
+{
+  "id": "external-sdxl-workflow",
+  "last_node_id": 19,
+  "last_link_id": 9,
+  "nodes": [
+    {
+      "id": 5,
+      "type": "EmptyLatentImage",
+      "inputs": [],
+      "outputs": [{"name": "LATENT", "type": "LATENT", "slot_index": 0, "links": [2]}],
+      "properties": {"cnr_id": "comfy-core", "Node name for S&R": "EmptyLatentImage"},
+      "widgets_values": [1024, 1024, 1]
+    },
+    {
+      "id": 4,
+      "type": "CheckpointLoaderSimple",
+      "inputs": [],
+      "outputs": [
+        {"name": "MODEL", "type": "MODEL", "slot_index": 0, "links": [1]},
+        {"name": "CLIP", "type": "CLIP", "slot_index": 1, "links": [3, 5]},
+        {"name": "VAE", "type": "VAE", "slot_index": 2, "links": [8]}
+      ],
+      "title": "Load Checkpoint",
+      "properties": {"cnr_id": "comfy-core", "Node name for S&R": "CheckpointLoaderSimple"},
+      "widgets_values": ["sd_xl_base_1.0.safetensors"]
+    },
+    {
+      "id": 6,
+      "type": "CLIPTextEncode",
+      "inputs": [{"name": "clip", "type": "CLIP", "link": 3}, {"name": "text", "type": "STRING", "widget": {"name": "text"}, "link": null}],
+      "outputs": [{"name": "CONDITIONING", "type": "CONDITIONING", "slot_index": 0, "links": [4]}],
+      "properties": {"cnr_id": "comfy-core", "Node name for S&R": "CLIPTextEncode"},
+      "widgets_values": ["sunset over a mountain lake"]
+    },
+    {
+      "id": 7,
+      "type": "CLIPTextEncode",
+      "inputs": [{"name": "clip", "type": "CLIP", "link": 5}, {"name": "text", "type": "STRING", "widget": {"name": "text"}, "link": null}],
+      "outputs": [{"name": "CONDITIONING", "type": "CONDITIONING", "slot_index": 0, "links": [6]}],
+      "properties": {"cnr_id": "comfy-core", "Node name for S&R": "CLIPTextEncode"},
+      "widgets_values": ["text, watermark"]
+    },
+    {
+      "id": 10,
+      "type": "KSamplerAdvanced",
+      "inputs": [
+        {"name": "model", "type": "MODEL", "link": 1},
+        {"name": "positive", "type": "CONDITIONING", "link": 4},
+        {"name": "negative", "type": "CONDITIONING", "link": 6},
+        {"name": "latent_image", "type": "LATENT", "link": 2}
+      ],
+      "outputs": [{"name": "LATENT", "type": "LATENT", "slot_index": 0, "links": [7]}],
+      "title": "KSampler Advanced",
+      "properties": {"cnr_id": "comfy-core", "Node name for S&R": "KSamplerAdvanced"},
+      "widgets_values": ["enable", 721897303308196, "fixed", 25, 8, "euler", "normal", 0, 25, "enable"]
+    },
+    {
+      "id": 17,
+      "type": "VAEDecode",
+      "inputs": [{"name": "samples", "type": "LATENT", "link": 7}, {"name": "vae", "type": "VAE", "link": 8}],
+      "outputs": [{"name": "IMAGE", "type": "IMAGE", "slot_index": 0, "links": [9]}],
+      "properties": {"cnr_id": "comfy-core", "Node name for S&R": "VAEDecode"},
+      "widgets_values": []
+    },
+    {
+      "id": 19,
+      "type": "SaveImage",
+      "inputs": [{"name": "images", "type": "IMAGE", "link": 9}],
+      "outputs": [],
+      "properties": {"cnr_id": "comfy-core"},
+      "widgets_values": ["ComfyUI"]
+    }
+  ],
+  "links": [
+    [1, 4, 0, 10, 0, "MODEL"],
+    [2, 5, 0, 10, 3, "LATENT"],
+    [3, 4, 1, 6, 0, "CLIP"],
+    [4, 6, 0, 10, 1, "CONDITIONING"],
+    [5, 4, 1, 7, 0, "CLIP"],
+    [6, 7, 0, 10, 2, "CONDITIONING"],
+    [7, 10, 0, 17, 0, "LATENT"],
+    [8, 4, 2, 17, 1, "VAE"],
+    [9, 17, 0, 19, 0, "IMAGE"]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {"node_versions": {"comfy-core": "0.3.33"}},
+  "version": 0.4
+}
