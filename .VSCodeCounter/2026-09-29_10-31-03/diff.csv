@@ -1,0 +1,22 @@
+"filename", "language", "pip requirements", "PowerShell", "Markdown", "HTML", "JSON", "Python", "PostCSS", "JavaScript", "comment", "blank", "total"
+"c:\webwork\comfy-workflow-assistant\README.md", "Markdown", 0, 0, 7, 0, 0, 0, 0, 0, 0, 3, 10
+"c:\webwork\comfy-workflow-assistant\app\main.py", "Python", 0, 0, 0, 0, 0, 365, 0, 0, 3, 23, 391
+"c:\webwork\comfy-workflow-assistant\app\schemas\workflow.py", "Python", 0, 0, 0, 0, 0, 16, 0, 0, 0, 2, 18
+"c:\webwork\comfy-workflow-assistant\app\services\comfy_client.py", "Python", 0, 0, 0, 0, 0, 316, 0, 0, 3, 22, 341
+"c:\webwork\comfy-workflow-assistant\app\services\model_metadata.py", "Python", 0, 0, 0, 0, 0, 92, 0, 0, 7, 16, 115
+"c:\webwork\comfy-workflow-assistant\app\services\model_profile_service.py", "Python", 0, 0, 0, 0, 0, 41, 0, 0, 0, 7, 48
+"c:\webwork\comfy-workflow-assistant\app\services\model_scanner.py", "Python", 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2
+"c:\webwork\comfy-workflow-assistant\app\services\workflow_builder.py", "Python", 0, 0, 0, 0, 0, 208, 0, 0, 1, 9, 218
+"c:\webwork\comfy-workflow-assistant\model_profiles\flux.json", "JSON", 0, 0, 0, 0, 14, 0, 0, 0, 0, 0, 14
+"c:\webwork\comfy-workflow-assistant\requirements.txt", "pip requirements", 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2
+"c:\webwork\comfy-workflow-assistant\scripts\Install-RealESRGAN-On-Parent.ps1", "PowerShell", 0, 54, 0, 0, 0, 0, 0, 0, 0, 7, 61
+"c:\webwork\comfy-workflow-assistant\static\css\app.css", "PostCSS", 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 5
+"c:\webwork\comfy-workflow-assistant\static\js\app.js", "JavaScript", 0, 0, 0, 0, 0, 0, 0, 399, 0, 17, 416
+"c:\webwork\comfy-workflow-assistant\templates\index.html", "HTML", 0, 0, 0, 33, 0, 0, 0, 0, 0, 0, 33
+"c:\webwork\comfy-workflow-assistant\tests\test_api_models.py", "Python", 0, 0, 0, 0, 0, 106, 0, 0, 0, 10, 116
+"c:\webwork\comfy-workflow-assistant\tests\test_api_workflow.py", "Python", 0, 0, 0, 0, 0, 233, 0, 0, 0, 20, 253
+"c:\webwork\comfy-workflow-assistant\tests\test_comfy_client.py", "Python", 0, 0, 0, 0, 0, 123, 0, 0, 0, 11, 134
+"c:\webwork\comfy-workflow-assistant\tests\test_model_metadata.py", "Python", 0, 0, 0, 0, 0, 53, 0, 0, 0, 12, 65
+"c:\webwork\comfy-workflow-assistant\tests\test_model_profile_service.py", "Python", 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 4
+"c:\webwork\comfy-workflow-assistant\tests\test_workflow_builder.py", "Python", 0, 0, 0, 0, 0, 119, 0, 0, 0, 10, 129
+"Total", "-", 2, 54, 7, 33, 14, 1678, 5, 399, 14, 169, 2375

@@ -1,0 +1,36 @@
+"filename", "language", "JSON", "pip requirements", "PowerShell", "Markdown", "Python", "HTML", "PostCSS", "JavaScript", "XML", "comment", "blank", "total"
+"c:\webwork\comfy-workflow-assistant\README.md", "Markdown", 0, 0, 0, 72, 0, 0, 0, 0, 0, 0, 34, 106
+"c:\webwork\comfy-workflow-assistant\app\__init__.py", "Python", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1
+"c:\webwork\comfy-workflow-assistant\app\main.py", "Python", 0, 0, 0, 0, 649, 0, 0, 0, 0, 3, 79, 731
+"c:\webwork\comfy-workflow-assistant\app\schemas\__init__.py", "Python", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1
+"c:\webwork\comfy-workflow-assistant\app\schemas\workflow.py", "Python", 0, 0, 0, 0, 30, 0, 0, 0, 0, 0, 5, 35
+"c:\webwork\comfy-workflow-assistant\app\services\__init__.py", "Python", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1
+"c:\webwork\comfy-workflow-assistant\app\services\comfy_client.py", "Python", 0, 0, 0, 0, 418, 0, 0, 0, 0, 3, 34, 455
+"c:\webwork\comfy-workflow-assistant\app\services\model_classifier.py", "Python", 0, 0, 0, 0, 10, 0, 0, 0, 0, 1, 3, 14
+"c:\webwork\comfy-workflow-assistant\app\services\model_metadata.py", "Python", 0, 0, 0, 0, 92, 0, 0, 0, 0, 7, 16, 115
+"c:\webwork\comfy-workflow-assistant\app\services\model_profile_service.py", "Python", 0, 0, 0, 0, 134, 0, 0, 0, 0, 0, 23, 157
+"c:\webwork\comfy-workflow-assistant\app\services\model_scanner.py", "Python", 0, 0, 0, 0, 70, 0, 0, 0, 0, 0, 9, 79
+"c:\webwork\comfy-workflow-assistant\app\services\settings.py", "Python", 0, 0, 0, 0, 23, 0, 0, 0, 0, 0, 7, 30
+"c:\webwork\comfy-workflow-assistant\app\services\workflow_builder.py", "Python", 0, 0, 0, 0, 468, 0, 0, 0, 0, 4, 53, 525
+"c:\webwork\comfy-workflow-assistant\model_profiles\flux.json", "JSON", 34, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 35
+"c:\webwork\comfy-workflow-assistant\model_profiles\sd15.json", "JSON", 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 21
+"c:\webwork\comfy-workflow-assistant\model_profiles\sdxl.json", "JSON", 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 21
+"c:\webwork\comfy-workflow-assistant\requirements.txt", "pip requirements", 0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 1, 7
+"c:\webwork\comfy-workflow-assistant\scripts\Install-RealESRGAN-On-Parent.ps1", "PowerShell", 0, 0, 54, 0, 0, 0, 0, 0, 0, 0, 7, 61
+"c:\webwork\comfy-workflow-assistant\start.ps1", "PowerShell", 0, 0, 35, 0, 0, 0, 0, 0, 0, 0, 7, 42
+"c:\webwork\comfy-workflow-assistant\static\css\app.css", "PostCSS", 0, 0, 0, 0, 0, 0, 11, 0, 0, 0, 1, 12
+"c:\webwork\comfy-workflow-assistant\static\js\app.js", "JavaScript", 0, 0, 0, 0, 0, 0, 0, 639, 0, 0, 33, 672
+"c:\webwork\comfy-workflow-assistant\templates\index.html", "HTML", 0, 0, 0, 0, 0, 82, 0, 0, 0, 0, 3, 85
+"c:\webwork\comfy-workflow-assistant\tests\fixtures\comfy\models\vae\vae.pt", "XML", 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 2
+"c:\webwork\comfy-workflow-assistant\tests\test_api_models.py", "Python", 0, 0, 0, 0, 149, 0, 0, 0, 0, 0, 22, 171
+"c:\webwork\comfy-workflow-assistant\tests\test_api_workflow.py", "Python", 0, 0, 0, 0, 320, 0, 0, 0, 0, 0, 35, 355
+"c:\webwork\comfy-workflow-assistant\tests\test_comfy_client.py", "Python", 0, 0, 0, 0, 200, 0, 0, 0, 0, 0, 35, 235
+"c:\webwork\comfy-workflow-assistant\tests\test_model_classifier.py", "Python", 0, 0, 0, 0, 11, 0, 0, 0, 0, 0, 6, 17
+"c:\webwork\comfy-workflow-assistant\tests\test_model_metadata.py", "Python", 0, 0, 0, 0, 53, 0, 0, 0, 0, 0, 12, 65
+"c:\webwork\comfy-workflow-assistant\tests\test_model_profile_service.py", "Python", 0, 0, 0, 0, 43, 0, 0, 0, 0, 0, 9, 52
+"c:\webwork\comfy-workflow-assistant\tests\test_model_scanner.py", "Python", 0, 0, 0, 0, 16, 0, 0, 0, 0, 0, 7, 23
+"c:\webwork\comfy-workflow-assistant\tests\test_workflow_builder.py", "Python", 0, 0, 0, 0, 219, 0, 0, 0, 0, 0, 27, 246
+"c:\webwork\comfy-workflow-assistant\tests\test_workflow_validator.py", "Python", 0, 0, 0, 0, 17, 0, 0, 0, 0, 0, 7, 24
+"c:\webwork\comfy-workflow-assistant\workflows\sd15\txt2img.json", "JSON", 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 10
+"c:\webwork\comfy-workflow-assistant\workflows\sdxl\txt2img.json", "JSON", 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 10
+"Total", "-", 92, 6, 89, 72, 2922, 82, 11, 639, 1, 18, 484, 4416

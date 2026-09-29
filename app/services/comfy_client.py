@@ -5,6 +5,7 @@ from datetime import datetime
 from urllib.parse import urljoin
 
 import httpx
+from app.services.model_metadata import classify_asset, metadata_role
 from app.services.model_profile_service import ModelProfileService
 
 logger = logging.getLogger("comfy_workflow_builder.comfy")
@@ -238,6 +239,33 @@ class ComfyClient:
                         "path_index": None,
                         "scale": _upscale_factor(name) if kind == "upscale_model" else None,
                     })
+        metadata_items = [
+            item for item in result
+            if item.get("type") in {"checkpoint", "lora"}
+            and item.get("extension") == "safetensors"
+            and item.get("inventory_source") == "model_folder"
+        ]
+        metadata_results = await asyncio.gather(
+            *(self.model_metadata("loras" if item["type"] == "lora" else "checkpoints", item["comfy_name"])
+              for item in metadata_items),
+            return_exceptions=True,
+        )
+        for item, metadata in zip(metadata_items, metadata_results):
+            if isinstance(metadata, Exception):
+                logger.debug("Could not read model metadata for %s: %s", item["comfy_name"], metadata)
+                metadata = {}
+            item["classification"] = classify_asset(item["comfy_name"], metadata)
+            item["family"] = item["classification"]["family"]
+            item["variant"] = item["classification"]["variant"]
+            role = metadata_role(metadata)
+            if item["type"] == "lora":
+                item["metadata_role"] = "lora"
+            elif role:
+                item["metadata_role"] = role
+            elif item["family"] == "unknown":
+                item["metadata_role"] = "unverified"
+            else:
+                item["metadata_role"] = "checkpoint"
         return sorted(result, key=lambda item: (item["type"], item["name"].casefold()))
 
     async def diagnostics(self) -> dict:
@@ -299,28 +327,6 @@ class ComfyClient:
 
         required_upscale_nodes = ("LoadImage", "UpscaleModelLoader", "ImageUpscaleWithModel", "SaveImage")
         node_names = set(node_catalog) if isinstance(node_catalog, dict) else set()
-        unclassified_checkpoints = [item for item in models if item.get("type") == "checkpoint" and item.get("family") == "unknown"]
-        metadata_items = [item for item in unclassified_checkpoints if item.get("extension") == "safetensors"]
-        checkpoint_metadata = await asyncio.gather(
-            *(self.model_metadata("checkpoints", item.get("comfy_name", item["name"]))
-              for item in metadata_items),
-            return_exceptions=True,
-        )
-        for item, metadata in zip(metadata_items, checkpoint_metadata):
-            if isinstance(metadata, Exception):
-                continue
-            architecture = str(metadata.get("modelspec.architecture", "")).lower()
-            network_module = str(metadata.get("ss_network_module", "")).lower()
-            if architecture.endswith("/lora") or network_module.endswith(".lora"):
-                item["metadata_role"] = "lora"
-            elif "stable-diffusion-xl" in architecture:
-                item["family"] = "sdxl"
-                item["metadata_role"] = "checkpoint"
-            elif any(marker in architecture for marker in ("stable-diffusion-v1-5", "stable-diffusion-v1.5", "sd-v1-5")):
-                item["family"] = "sd15"
-                item["metadata_role"] = "checkpoint"
-            else:
-                item["metadata_role"] = "unverified"
         upscale_models = [item for item in models if item.get("type") == "upscale_model"]
         checkpoints = [item for item in models if item.get("type") == "checkpoint"]
         sd15_checkpoints = [item for item in checkpoints if item.get("family") == "sd15"]
@@ -356,9 +362,23 @@ class ComfyClient:
                 "upscale_models": "upscale_model", "controlnet": "controlnet",
             }.items()
         }
+        issues = []
+        if not upscale_models:
+            issues.append({"severity": "WARNING", "code": "upscale_model_missing", "message": "Upscale ModelをComfyUIが認識していません。"})
+        if misplaced_loras:
+            issues.append({"severity": "WARNING", "code": "misplaced_lora", "message": f"CheckpointフォルダにLoRAメタデータのファイルが{len(misplaced_loras)}件あります。自動移動は行いません。"})
+        if unclassified_checkpoints:
+            issues.append({"severity": "WARNING", "code": "checkpoint_unclassified", "message": f"Checkpointの系統を判定できないファイルが{len(unclassified_checkpoints)}件あります。"})
+        if not sd15_checkpoints:
+            issues.append({"severity": "WARNING", "code": "sd15_checkpoint_missing", "message": "SD1.5 Workflowはありますが、系統を確認できるCheckpointがありません。"})
+        if missing_flux:
+            issues.append({"severity": "WARNING", "code": "flux_assets_missing", "message": "Flux生成に必要なモデル構成が不足しています: " + "、".join(missing_flux)})
+        issues.append({"severity": "INFO", "code": "parent_logs_unavailable", "message": "ComfyUI APIから親機ログを取得できないため、xFormers・Triton・flash-attn等の警告は照合できません。"})
+
         return {
             "online": True,
             "server": {
+                "url": status["url"],
                 "version": system.get("comfyui_version"),
                 "python_version": system.get("python_version"),
                 "pytorch_version": system.get("pytorch_version"),
@@ -367,6 +387,7 @@ class ComfyClient:
                 "devices": devices,
             },
             "model_source": "comfy_api",
+            "issues": issues,
             "model_folder_paths": selected_folders,
             "model_counts": category_counts,
             "models": models,

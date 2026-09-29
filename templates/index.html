@@ -61,7 +61,7 @@
         <div class="seed-row"><label class="field-label" for="seed-mode">Seed</label><select id="seed-mode"><option value="random">毎回ランダム</option><option value="fixed">固定値</option></select><input id="seed" type="number" value="1" min="0" max="4294967295" disabled></div>
         <div id="negative-field"><label class="field-label" for="negative">Negative Prompt <span class="optional">任意</span></label><textarea id="negative" rows="2" placeholder="避けたい要素を入力"></textarea></div>
       </details>
-      <details class="lora-options"><summary>LoRAを使う <span class="optional">任意</span></summary><div class="field-grid two"><label class="field-label">LoRA<select id="lora"><option value="">使わない</option></select></label><label class="field-label">Weight<input id="lora-weight" type="number" min="-2" max="2" step="0.05" value="0.8"></label></div></details>
+      <details class="lora-options"><summary>LoRAを使う <span class="optional">任意</span></summary><div class="field-grid two"><label class="field-label">LoRA<select id="lora"><option value="">使わない</option></select></label><label class="field-label">Weight<input id="lora-weight" type="number" min="-2" max="2" step="0.05" value="0.8"></label></div><div id="lora-compatibility" class="lora-compatibility help-text">LoRAを選ぶとCheckpointとの互換性を表示します。</div></details>
       </div>
       <div class="actions"><button id="build-button" class="button secondary">Workflow生成</button><button id="save-ui-button" class="button primary">ComfyUI Workflowを保存</button><button id="save-api-button" class="button secondary">API Promptを保存</button><button id="run-button" class="button primary">▶ ComfyUIで生成</button></div>
       <div id="message" class="message hidden" role="status"></div>

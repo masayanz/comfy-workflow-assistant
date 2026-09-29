@@ -156,10 +156,50 @@ class WorkflowApiTests(unittest.TestCase):
 
     def test_build_endpoint_rejects_missing_lora(self):
         model = {"name": "base.safetensors", "comfy_name": "base.safetensors", "type": "checkpoint", "family": "sdxl"}
-        with patch("app.main.resolve_model", new=AsyncMock(return_value=model)), patch("app.main._models_cache", []), patch("app.main.scan_models", return_value=[]), patch("app.main.client") as client_factory:
-            client_factory.return_value.available_models = AsyncMock(return_value=[])
+        with patch("app.main.resolve_model", new=AsyncMock(return_value=model)), patch("app.main.scan_current_models", new=AsyncMock(return_value=[])):
             response = TestClient(app).post("/api/workflow/build", json={"model": "base.safetensors", "prompt": "x", "lora": "missing.safetensors"})
         self.assertEqual(response.status_code, 400)
+
+    def test_clear_lora_family_mismatch_blocks_queue(self):
+        checkpoint = {"name": "base.safetensors", "comfy_name": "base.safetensors", "type": "checkpoint", "family": "sdxl",
+                      "classification": {"family": "sdxl", "confidence": "high", "source": "metadata"}}
+        lora = {"name": "sd15-style.safetensors", "comfy_name": "sd15-style.safetensors", "type": "lora", "family": "sd15",
+                "classification": {"family": "sd15", "confidence": "high", "source": "metadata"}}
+        with patch("app.main.resolve_model", new=AsyncMock(return_value=checkpoint)), \
+             patch("app.main.scan_current_models", new=AsyncMock(return_value=[checkpoint, lora])), \
+             patch("app.main.client") as client_factory:
+            client_factory.return_value.status = AsyncMock(return_value={"online": True, "url": "https://comfy"})
+            client_factory.return_value.queue = AsyncMock(return_value="must-not-queue")
+            response = TestClient(app).post("/api/workflow/run", json={
+                "model": checkpoint["comfy_name"], "lora": lora["comfy_name"], "prompt": "portrait",
+            })
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"]["code"], "lora_incompatible")
+        client_factory.return_value.queue.assert_not_awaited()
+
+    def test_unknown_lora_is_warning_and_workflow_can_be_built(self):
+        checkpoint = {"name": "base.safetensors", "comfy_name": "base.safetensors", "type": "checkpoint", "family": "sdxl",
+                      "classification": {"family": "sdxl", "confidence": "high", "source": "metadata"}}
+        lora = {"name": "unknown-style.safetensors", "comfy_name": "unknown-style.safetensors", "type": "lora", "family": "unknown",
+                "classification": {"family": "unknown", "confidence": "unknown", "source": "unknown"}}
+        with patch("app.main.resolve_model", new=AsyncMock(return_value=checkpoint)), \
+             patch("app.main.scan_current_models", new=AsyncMock(return_value=[checkpoint, lora])):
+            response = TestClient(app).post("/api/workflow/build", json={
+                "model": checkpoint["comfy_name"], "lora": lora["comfy_name"], "prompt": "portrait",
+            })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["lora_compatibility"]["status"], "unknown")
+
+    def test_lora_compatibility_endpoint_returns_model_classifications(self):
+        checkpoint = {"name": "pony.safetensors", "comfy_name": "pony.safetensors", "type": "checkpoint", "family": "sdxl",
+                      "classification": {"family": "sdxl", "variant": "pony", "confidence": "high", "source": "metadata"}}
+        lora = {"name": "pony-style.safetensors", "comfy_name": "pony-style.safetensors", "type": "lora", "family": "sdxl",
+                "classification": {"family": "sdxl", "variant": "pony", "confidence": "high", "source": "metadata"}}
+        with patch("app.main.scan_current_models", new=AsyncMock(return_value=[checkpoint, lora])):
+            response = TestClient(app).get("/api/models/compatibility", params={"checkpoint": checkpoint["comfy_name"]})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["checkpoint_classification"]["variant"], "pony")
+        self.assertEqual(response.json()["loras"][0]["compatibility"]["status"], "compatible")
 
     def test_run_endpoint_queues_workflow_without_claiming_completion(self):
         from app.schemas.workflow import WorkflowBuildRequest
@@ -291,6 +331,13 @@ class WorkflowApiTests(unittest.TestCase):
         self.assertEqual(result["model_counts"]["upscale_models"], 1)
         self.assertEqual(result["sd15"]["checkpoint_count"], 1)
         self.assertEqual(result["sd15"]["unclassified_checkpoint_names"], ["unclassified.safetensors"])
+
+    def test_diagnostics_marks_comfy_offline_as_blocking(self):
+        with patch("app.main.client") as client_factory:
+            client_factory.return_value.diagnostics = AsyncMock(return_value={"online": False, "url": "https://comfy"})
+            response = TestClient(app).get("/api/diagnostics")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["issues"][0]["severity"], "BLOCKING")
 
     def test_comfy_models_endpoint_uses_parent_api_inventory(self):
         parent_models = [{"name": "4x-parent.pth", "comfy_name": "4x-parent.pth", "type": "upscale_model", "recognized": True}]

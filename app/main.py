@@ -1,3 +1,4 @@
+import asyncio
 import json
 import io
 import logging
@@ -19,7 +20,8 @@ from pydantic import BaseModel, Field
 
 from app.schemas.workflow import WorkflowBuildRequest
 from app.services.comfy_client import ComfyClient
-from app.services.model_scanner import custom_node_count, find_comfy_root, scan_models
+from app.services.model_scanner import custom_node_count, find_comfy_root
+from app.services.model_metadata import classify_asset, classify_compatibility
 from app.services.model_profile_service import ModelProfileService
 from app.services.settings import get_settings, save_settings
 from app.services.workflow_builder import build_definition, build_workflow, to_api_prompt, to_ui_workflow
@@ -38,6 +40,10 @@ logger = logging.getLogger("comfy_workflow_builder")
 app = FastAPI(title="Comfy Workflow Builder", version="0.1.0")
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 _models_cache: list[dict] = []
+_models_cache_at = 0.0
+_models_cache_url = ""
+_models_cache_lock = asyncio.Lock()
+MODEL_CACHE_TTL_SECONDS = 15
 MAX_IMAGE_UPLOAD_BYTES = 20 * 1024 * 1024
 MAX_IMAGE_PIXELS = 64_000_000
 UPLOAD_TTL_SECONDS = 30 * 24 * 60 * 60
@@ -78,27 +84,50 @@ def current_root() -> str | None:
 
 
 def apply_model_overrides(models: list[dict]) -> list[dict]:
-    overrides = get_settings().get("model_families", {})
+    settings = get_settings()
+    overrides = settings.get("model_families", {})
+    classifications = settings.get("model_classifications", {})
     for item in models:
-        if item["type"] == "checkpoint" and item["comfy_name"] in overrides:
-            item["family"] = overrides[item["comfy_name"]]
+        name = item.get("comfy_name", item.get("name", ""))
+        manual = classifications.get(f"{item.get('type')}:{name}")
+        if not manual and item.get("type") == "checkpoint" and name in overrides:
+            manual = {"family": overrides[name]}
+        if manual:
+            item["classification"] = classify_asset(name, manual=manual)
+            item["family"] = item["classification"]["family"]
+            item["variant"] = item["classification"]["variant"]
+            item["metadata_role"] = "lora" if item.get("type") == "lora" else "checkpoint"
     return models
 
 
-async def scan_current_models() -> list[dict]:
-    global _models_cache
-    root = current_root()
-    local_models = scan_models(root) if root else []
-    if local_models:
-        _models_cache = local_models
-    else:
-        try:
-            _models_cache = await client().available_models()
-            logger.info("ComfyUI APIからモデルを取得しました: %d件", len(_models_cache))
-        except Exception:
-            logger.exception("ComfyUIからモデル一覧を取得できませんでした")
-            _models_cache = []
-    return apply_model_overrides(_models_cache)
+async def parent_model_inventory(*, force_refresh: bool = False) -> list[dict]:
+    global _models_cache, _models_cache_at, _models_cache_url
+    comfy = client()
+    cache_url = comfy.base_url
+    now = time.monotonic()
+    if not force_refresh and cache_url == _models_cache_url and now - _models_cache_at < MODEL_CACHE_TTL_SECONDS:
+        return [dict(item) for item in _models_cache]
+    async with _models_cache_lock:
+        now = time.monotonic()
+        if not force_refresh and cache_url == _models_cache_url and now - _models_cache_at < MODEL_CACHE_TTL_SECONDS:
+            return [dict(item) for item in _models_cache]
+        _models_cache = await comfy.available_models()
+        _models_cache_url = cache_url
+        _models_cache_at = time.monotonic()
+        logger.info("親機ComfyUI APIからモデルを取得しました: %d件", len(_models_cache))
+        return [dict(item) for item in _models_cache]
+
+
+async def scan_current_models(*, force_refresh: bool = False) -> list[dict]:
+    global _models_cache_at
+    try:
+        models = await parent_model_inventory(force_refresh=force_refresh)
+    except Exception:
+        logger.exception("親機ComfyUI APIからモデル一覧を取得できませんでした")
+        if force_refresh:
+            _models_cache_at = 0.0
+        return []
+    return apply_model_overrides(models)
 
 
 async def resolve_model(name: str) -> dict:
@@ -292,13 +321,29 @@ async def validate_and_upload_image(image: UploadFile) -> dict:
     return record
 
 
-async def validate_lora(name: str | None) -> None:
+async def validate_lora(name: str | None, checkpoint: dict | str | None = None) -> dict | None:
     if not name:
-        return
+        return None
     models = await scan_current_models()
-    available = {item.get("comfy_name", item["name"]) for item in models if item["type"] == "lora"}
-    if name not in available:
+    lora = next((item for item in models if item.get("type") == "lora" and item.get("comfy_name", item["name"]) == name), None)
+    if not lora:
         raise HTTPException(status_code=400, detail="選択したLoRAが見つかりません。モデルを再スキャンしてください。")
+    if not checkpoint:
+        return None
+    if isinstance(checkpoint, str):
+        checkpoint = next((item for item in models if item.get("type") == "checkpoint" and item.get("comfy_name", item["name"]) == checkpoint), None)
+    if not checkpoint:
+        raise HTTPException(status_code=400, detail="選択したCheckpointが親機ComfyUIに見つかりません。")
+    result = classify_compatibility(checkpoint, lora)
+    result["checkpoint_name"] = checkpoint.get("name")
+    result["lora_name"] = lora.get("name")
+    if result["status"] == "incompatible":
+        logger.warning("LoRA compatibility blocked checkpoint=%s lora=%s result=%s", checkpoint.get("comfy_name"), name, result)
+        raise HTTPException(status_code=400, detail={
+            "code": "lora_incompatible", "message": "選択したLoRAはCheckpointと互換性がありません。別のLoRAを選択してください。",
+            "compatibility": result,
+        })
+    return result
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -319,7 +364,7 @@ async def app_status():
         "loras": sum(1 for item in models if item["type"] == "lora"),
         "custom_nodes": custom_node_count(current_root()),
         "comfy_path": current_root(),
-        "model_source": "filesystem" if current_root() else "comfy_api",
+        "model_source": "comfy_api",
         "settings": settings,
     }
 
@@ -329,6 +374,7 @@ async def diagnostics():
     try:
         result = await client().diagnostics()
         if not result.get("online"):
+            result["issues"] = [{"severity": "BLOCKING", "code": "comfy_offline", "message": "親機ComfyUIへ接続できません。URLと起動状態を確認してください。"}]
             return result
         models = apply_model_overrides(result.get("models", []))
         result["models"] = models
@@ -348,6 +394,12 @@ async def diagnostics():
             item["name"] for item in checkpoints
             if item.get("family") == "unknown" and item.get("metadata_role") != "lora"
         ]
+        refreshed_codes = {"checkpoint_unclassified", "sd15_checkpoint_missing"}
+        result["issues"] = [issue for issue in result.get("issues", []) if issue.get("code") not in refreshed_codes]
+        if sd15["unclassified_checkpoint_names"]:
+            result["issues"].append({"severity": "WARNING", "code": "checkpoint_unclassified", "message": f"Checkpointの系統を判定できないファイルが{len(sd15['unclassified_checkpoint_names'])}件あります。"})
+        if not sd15_models:
+            result["issues"].append({"severity": "WARNING", "code": "sd15_checkpoint_missing", "message": "SD1.5 Workflowはありますが、系統を確認できるCheckpointがありません。"})
         return result
     except Exception as exc:
         logger.exception("親機ComfyUI診断を取得できませんでした")
@@ -368,7 +420,7 @@ async def models():
 async def comfy_models():
     """Return models recognized by the configured parent ComfyUI API."""
     try:
-        return apply_model_overrides(await client().available_models())
+        return apply_model_overrides(await parent_model_inventory())
     except Exception as exc:
         logger.exception("親機ComfyUIからモデル一覧を取得できませんでした")
         raise HTTPException(status_code=502, detail="親機ComfyUIから認識済みモデル一覧を取得できません。接続とComfyUIログを確認してください。") from exc
@@ -385,18 +437,28 @@ async def upload_image(image: UploadFile = File(...)):
 
 @app.post("/api/models/scan")
 async def scan():
-    items = await scan_current_models()
-    return {"items": items, "comfy_path": current_root(), "source": "filesystem" if current_root() else "comfy_api"}
+    items = await scan_current_models(force_refresh=True)
+    return {"items": items, "comfy_path": current_root(), "source": "comfy_api"}
 
 
 class ModelClassification(BaseModel):
     model: str
     family: str = Field(min_length=1, max_length=50)
+    asset_type: str = Field(default="checkpoint", min_length=1, max_length=50)
+    variant: str | None = Field(default=None, max_length=50)
 
 
 @app.post("/api/models/classify")
 async def classify(payload: ModelClassification):
-    model = await resolve_model(payload.model)
+    if payload.asset_type not in {"checkpoint", "lora"}:
+        raise HTTPException(status_code=422, detail="CheckpointまたはLoRAを指定してください。")
+    if payload.asset_type == "checkpoint":
+        model = await resolve_model(payload.model)
+    else:
+        models = await scan_current_models()
+        model = next((item for item in models if item.get("type") == "lora" and item.get("comfy_name", item["name"]) == payload.model), None)
+    if not model:
+        raise HTTPException(status_code=400, detail="選択したモデルが親機ComfyUIに見つかりません。再スキャンしてください。")
     if payload.family != "unknown":
         try:
             ModelProfileService().get_profile(payload.family)
@@ -404,12 +466,20 @@ async def classify(payload: ModelClassification):
             raise HTTPException(status_code=422, detail="選択したモデルProfileがありません。") from exc
         except ValueError as exc:
             raise HTTPException(status_code=500, detail="モデルProfileの設定を確認してください。") from exc
+    if payload.variant and (payload.family != "sdxl" or payload.variant != "pony"):
+        raise HTTPException(status_code=422, detail="variant=ponyはSDXL分類でのみ指定できます。")
     settings = get_settings()
-    overrides = dict(settings.get("model_families", {}))
-    overrides[model["comfy_name"]] = payload.family
-    settings["model_families"] = overrides
+    classifications = dict(settings.get("model_classifications", {}))
+    classifications[f"{payload.asset_type}:{model['comfy_name']}"] = {"family": payload.family, "variant": payload.variant}
+    settings["model_classifications"] = classifications
+    if payload.asset_type == "checkpoint":
+        overrides = dict(settings.get("model_families", {}))
+        overrides[model["comfy_name"]] = payload.family
+        settings["model_families"] = overrides
     save_settings(settings)
+    model["classification"] = classify_asset(model["comfy_name"], manual=classifications[f"{payload.asset_type}:{model['comfy_name']}"])
     model["family"] = payload.family
+    model["variant"] = payload.variant
     logger.info("モデル分類を更新しました: %s -> %s", model["comfy_name"], payload.family)
     return model
 
@@ -439,6 +509,20 @@ async def loras():
     return [item for item in await scan_current_models() if item["type"] == "lora"]
 
 
+@app.get("/api/models/compatibility")
+async def lora_compatibility(checkpoint: str):
+    models = await scan_current_models()
+    selected = next((item for item in models if item.get("type") == "checkpoint" and item.get("comfy_name", item["name"]) == checkpoint), None)
+    if not selected:
+        raise HTTPException(status_code=400, detail="選択したCheckpointが親機ComfyUIに見つかりません。")
+    return {
+        "checkpoint": selected.get("name", checkpoint),
+        "checkpoint_classification": selected.get("classification"),
+        "loras": [{**lora, "compatibility": classify_compatibility(selected, lora)}
+                   for lora in models if lora.get("type") == "lora"],
+    }
+
+
 @app.get("/api/settings")
 async def settings():
     return get_settings()
@@ -459,8 +543,10 @@ async def update_settings(payload: SettingsUpdate):
 async def build(payload: WorkflowBuildRequest):
     family, model, ready, missing = await resolve_workflow_target(payload)
     input_image = resolve_workflow_input(payload)
+    lora_compatibility = None
     if family != "flux":
-        await validate_lora(payload.lora)
+        validation = await validate_lora(payload.lora, model)
+        lora_compatibility = validation if isinstance(validation, dict) else None
     try:
         definition = build_definition(payload, family, input_image["comfy_name"] if input_image else None)
         workflow = to_api_prompt(definition)
@@ -471,6 +557,7 @@ async def build(payload: WorkflowBuildRequest):
     return {
         "workflow": workflow, "ui_workflow": ui_workflow, "model": model,
         "generation_type": payload.generation_type, "ready": ready, "missing_assets": missing,
+        "lora_compatibility": lora_compatibility,
         "input_image": {key: input_image[key] for key in ("name", "width", "height")} if input_image else None,
     }
 
@@ -480,7 +567,7 @@ async def save_workflow(payload: WorkflowBuildRequest):
     family, model, _, _ = await resolve_workflow_target(payload, require_flux_assets=True)
     input_image = resolve_workflow_input(payload)
     if family != "flux":
-        await validate_lora(payload.lora)
+        await validate_lora(payload.lora, model)
     try:
         workflow = build_workflow(payload, family, input_image["comfy_name"] if input_image else None)
     except ValueError as exc:
@@ -500,7 +587,7 @@ async def save_ui_workflow(payload: WorkflowBuildRequest):
     family, model, _, _ = await resolve_workflow_target(payload, require_flux_assets=True)
     input_image = resolve_workflow_input(payload)
     if family != "flux":
-        await validate_lora(payload.lora)
+        await validate_lora(payload.lora, model)
     try:
         definition = build_definition(payload, family, input_image["comfy_name"] if input_image else None)
         workflow = to_ui_workflow(definition)
@@ -533,8 +620,10 @@ async def run_workflow(payload: WorkflowBuildRequest):
         raise HTTPException(status_code=503, detail="ComfyUIに接続できません。設定のURLとComfyUIの起動状態を確認してください。")
     family, model, _, _ = await resolve_workflow_target(payload, require_flux_assets=True)
     input_image = resolve_workflow_input(payload)
+    lora_compatibility = None
     if family != "flux":
-        await validate_lora(payload.lora)
+        validation = await validate_lora(payload.lora, model)
+        lora_compatibility = validation if isinstance(validation, dict) else None
     try:
         workflow = build_workflow(payload, family, input_image["comfy_name"] if input_image else None)
         comfy = client()
@@ -581,6 +670,7 @@ async def run_workflow(payload: WorkflowBuildRequest):
         "input_image": {key: input_image[key] for key in ("name", "width", "height")} if input_image else None,
         "upscale_model": model.get("name") if family == "upscale" else None,
         "upscale_scale": model.get("scale") if family == "upscale" else None,
+        "lora_compatibility": lora_compatibility,
         "estimated_output_size": ({"width": input_image["width"] * model["scale"], "height": input_image["height"] * model["scale"]}
                                   if family == "upscale" and model.get("scale") else None),
     }

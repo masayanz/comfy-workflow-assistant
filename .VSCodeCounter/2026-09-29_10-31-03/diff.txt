@@ -1,0 +1,63 @@
+Date : 2026-09-29 10:31:03
+Directory : c:\webwork\comfy-workflow-assistant
+Total : 20 files,  2192 codes, 14 comments, 169 blanks, all 2375 lines
+
+Languages
++------------------+------------+------------+------------+------------+------------+
+| language         | files      | code       | comment    | blank      | total      |
++------------------+------------+------------+------------+------------+------------+
+| Python           |         13 |      1,678 |         14 |        142 |      1,834 |
+| JavaScript       |          1 |        399 |          0 |         17 |        416 |
+| PowerShell       |          1 |         54 |          0 |          7 |         61 |
+| HTML             |          1 |         33 |          0 |          0 |         33 |
+| JSON             |          1 |         14 |          0 |          0 |         14 |
+| Markdown         |          1 |          7 |          0 |          3 |         10 |
+| PostCSS          |          1 |          5 |          0 |          0 |          5 |
+| pip requirements |          1 |          2 |          0 |          0 |          2 |
++------------------+------------+------------+------------+------------+------------+
+
+Directories
++------------------------------------------------------------------------------+------------+------------+------------+------------+------------+
+| path                                                                         | files      | code       | comment    | blank      | total      |
++------------------------------------------------------------------------------+------------+------------+------------+------------+------------+
+| .                                                                            |         20 |      2,192 |         14 |        169 |      2,375 |
+| . (Files)                                                                    |          2 |          9 |          0 |          3 |         12 |
+| app                                                                          |          7 |      1,040 |         14 |         79 |      1,133 |
+| app (Files)                                                                  |          1 |        365 |          3 |         23 |        391 |
+| app\schemas                                                                  |          1 |         16 |          0 |          2 |         18 |
+| app\services                                                                 |          5 |        659 |         11 |         54 |        724 |
+| model_profiles                                                               |          1 |         14 |          0 |          0 |         14 |
+| scripts                                                                      |          1 |         54 |          0 |          7 |         61 |
+| static                                                                       |          2 |        404 |          0 |         17 |        421 |
+| static\css                                                                   |          1 |          5 |          0 |          0 |          5 |
+| static\js                                                                    |          1 |        399 |          0 |         17 |        416 |
+| templates                                                                    |          1 |         33 |          0 |          0 |         33 |
+| tests                                                                        |          6 |        638 |          0 |         63 |        701 |
++------------------------------------------------------------------------------+------------+------------+------------+------------+------------+
+
+Files
++------------------------------------------------------------------------------+------------------+------------+------------+------------+------------+
+| filename                                                                     | language         | code       | comment    | blank      | total      |
++------------------------------------------------------------------------------+------------------+------------+------------+------------+------------+
+| c:\webwork\comfy-workflow-assistant\README.md                                | Markdown         |          7 |          0 |          3 |         10 |
+| c:\webwork\comfy-workflow-assistant\app\main.py                              | Python           |        365 |          3 |         23 |        391 |
+| c:\webwork\comfy-workflow-assistant\app\schemas\workflow.py                  | Python           |         16 |          0 |          2 |         18 |
+| c:\webwork\comfy-workflow-assistant\app\services\comfy_client.py             | Python           |        316 |          3 |         22 |        341 |
+| c:\webwork\comfy-workflow-assistant\app\services\model_metadata.py           | Python           |         92 |          7 |         16 |        115 |
+| c:\webwork\comfy-workflow-assistant\app\services\model_profile_service.py    | Python           |         41 |          0 |          7 |         48 |
+| c:\webwork\comfy-workflow-assistant\app\services\model_scanner.py            | Python           |          2 |          0 |          0 |          2 |
+| c:\webwork\comfy-workflow-assistant\app\services\workflow_builder.py         | Python           |        208 |          1 |          9 |        218 |
+| c:\webwork\comfy-workflow-assistant\model_profiles\flux.json                 | JSON             |         14 |          0 |          0 |         14 |
+| c:\webwork\comfy-workflow-assistant\requirements.txt                         | pip requirements |          2 |          0 |          0 |          2 |
+| c:\webwork\comfy-workflow-assistant\scripts\Install-RealESRGAN-On-Parent.ps1 | PowerShell       |         54 |          0 |          7 |         61 |
+| c:\webwork\comfy-workflow-assistant\static\css\app.css                       | PostCSS          |          5 |          0 |          0 |          5 |
+| c:\webwork\comfy-workflow-assistant\static\js\app.js                         | JavaScript       |        399 |          0 |         17 |        416 |
+| c:\webwork\comfy-workflow-assistant\templates\index.html                     | HTML             |         33 |          0 |          0 |         33 |
+| c:\webwork\comfy-workflow-assistant\tests\test_api_models.py                 | Python           |        106 |          0 |         10 |        116 |
+| c:\webwork\comfy-workflow-assistant\tests\test_api_workflow.py               | Python           |        233 |          0 |         20 |        253 |
+| c:\webwork\comfy-workflow-assistant\tests\test_comfy_client.py               | Python           |        123 |          0 |         11 |        134 |
+| c:\webwork\comfy-workflow-assistant\tests\test_model_metadata.py             | Python           |         53 |          0 |         12 |         65 |
+| c:\webwork\comfy-workflow-assistant\tests\test_model_profile_service.py      | Python           |          4 |          0 |          0 |          4 |
+| c:\webwork\comfy-workflow-assistant\tests\test_workflow_builder.py           | Python           |        119 |          0 |         10 |        129 |
+| Total                                                                        |                  |      2,192 |         14 |        169 |      2,375 |
++------------------------------------------------------------------------------+------------------+------------+------------+------------+------------+

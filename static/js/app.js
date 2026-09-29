@@ -1,10 +1,13 @@
-const state = { models: [], comfyModels: [], profiles: new Map(), family: 'all', selected: null, activeProfile: null, profileRequest: 0, lastPayload: null, inputImage: null, isRunning: false, comfyOnline: false, diagnostics: null };
+const state = { models: [], comfyModels: [], profiles: new Map(), loraCompatibility: new Map(), family: 'all', selected: null, activeProfile: null, profileRequest: 0, lastPayload: null, inputImage: null, isRunning: false, comfyOnline: false, diagnostics: null };
 const $ = (selector) => document.querySelector(selector);
 
 async function api(path, options = {}) {
   const response = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...(options.headers || {}) } });
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.detail || `通信に失敗しました (${response.status})`);
+  if (!response.ok) {
+    const detail = body.detail;
+    throw new Error(typeof detail === 'object' ? (detail.message || JSON.stringify(detail)) : (detail || `通信に失敗しました (${response.status})`));
+  }
   return body;
 }
 
@@ -45,7 +48,7 @@ function renderModels() {
     return;
   }
   list.innerHTML = items.map((model, index) => `<button class="model-card ${state.selected?.path === model.path ? 'selected' : ''}" data-index="${index}">
-    <span class="model-icon">◈</span><span class="model-info"><strong title="${escapeHtml(model.name)}">${escapeHtml(model.name)}</strong><small>${formatSize(model.size)} <span class="family-pill ${model.family}">${familyName(model.family)}</span></small></span><span class="radio"></span></button>`).join('');
+    <span class="model-icon">◈</span><span class="model-info"><strong title="${escapeHtml(model.name)}">${escapeHtml(model.name)}</strong><small>${formatSize(model.size)} <span class="family-pill ${model.family}">${classificationName(model.classification || { family: model.family })}</span></small></span><span class="radio"></span></button>`).join('');
   list.querySelectorAll('.model-card').forEach((button) => button.addEventListener('click', () => {
     state.selected = items[Number(button.dataset.index)];
     state.activeProfile = null;
@@ -54,7 +57,82 @@ function renderModels() {
 }
 
 function familyName(family) { return ({ sdxl: 'SDXL', sd15: 'SD1.5', flux: 'Flux', unknown: '不明' })[family] || family; }
+function classificationName(classification = {}) { return `${classification.variant === 'pony' ? 'Pony' : familyName(classification.family || 'unknown')}`; }
 function escapeHtml(value) { return String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]); }
+
+function loraCompatibilityLabel(status) {
+  return ({ compatible: '互換', compatible_with_warning: '要確認', incompatible: '非互換', unknown: 'Unknown / 要確認' })[status] || '未判定 / 要確認';
+}
+
+function renderLoraOptions() {
+  const select = $('#lora');
+  if (!select) return;
+  const selected = select.value;
+  select.innerHTML = '<option value="">使わない</option>' + state.models.filter((model) => model.type === 'lora').map((model) => {
+    const name = model.comfy_name || model.name;
+    const entry = state.loraCompatibility.get(name);
+    const compatibility = entry?.compatibility;
+    const status = compatibility?.status || 'unknown';
+    const label = `${model.name} · ${classificationName(entry?.classification || model.classification || { family: model.family })} / ${loraCompatibilityLabel(status)}`;
+    return `<option value="${escapeHtml(name)}" ${status === 'incompatible' ? 'disabled' : ''}>${escapeHtml(label)}</option>`;
+  }).join('');
+  if ([...select.options].some((option) => option.value === selected)) select.value = selected;
+  renderLoraCompatibility();
+}
+
+function renderLoraCompatibility() {
+  const holder = $('#lora-compatibility');
+  if (!holder) return;
+  const name = $('#lora')?.value;
+  if (!name) { holder.textContent = 'LoRAを選ぶとCheckpointとの互換性を表示します。Unknownは警告のみでQueueできます。'; holder.className = 'lora-compatibility help-text'; return; }
+  const entry = state.loraCompatibility.get(name);
+  const result = entry?.compatibility;
+  const classification = entry?.classification || {};
+  const choices = [...state.profiles.values()].map((profile) => [profile.id, profile.name]);
+  choices.push(['unknown', '不明']);
+  holder.className = `lora-compatibility ${result?.status || 'unknown'}`;
+  holder.innerHTML = `<strong>${escapeHtml(loraCompatibilityLabel(result?.status))}</strong>: ${escapeHtml(result?.message || '互換性を判定できません。Queue前に確認してください。')}<div class="lora-classification"><label>LoRA系統<select id="lora-family-select">${choices.map(([value,label]) => `<option value="${escapeHtml(value)}" ${(classification.family || entry?.family || 'unknown') === value ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('')}</select></label><label>variant<select id="lora-variant-select" ${(classification.family || entry?.family) !== 'sdxl' ? 'disabled' : ''}><option value="" ${classification.variant !== 'pony' ? 'selected' : ''}>一般SDXL</option><option value="pony" ${classification.variant === 'pony' ? 'selected' : ''}>Pony</option></select></label></div>`;
+  const saveClassification = async () => {
+    try {
+      const family = $('#lora-family-select').value;
+      const variant = family === 'sdxl' ? $('#lora-variant-select').value || null : null;
+      await api('/api/models/classify', { method: 'POST', body: JSON.stringify({ model: name, asset_type: 'lora', family, variant }) });
+      state.models = state.models.map((model) => (model.comfy_name || model.name) === name && model.type === 'lora'
+        ? { ...model, family, variant, classification: { family, variant, confidence: 'high', source: 'manual', evidence: ['ユーザーが手動分類'] } } : model);
+      await loadLoraCompatibility(state.selected);
+      showMessage('LoRAの分類を保存しました。', 'success');
+    } catch (error) { showMessage(error.message, 'error'); }
+  };
+  $('#lora-family-select').addEventListener('change', () => { $('#lora-variant-select').disabled = $('#lora-family-select').value !== 'sdxl'; saveClassification(); });
+  $('#lora-variant-select').addEventListener('change', saveClassification);
+}
+
+async function loadLoraCompatibility(model) {
+  if (!model || model.type !== 'checkpoint') {
+    state.loraCompatibility.clear(); renderLoraOptions(); return;
+  }
+  try {
+    const result = await api(`/api/models/compatibility?checkpoint=${encodeURIComponent(model.comfy_name || model.name)}`);
+    state.loraCompatibility = new Map((result.loras || []).map((item) => [item.comfy_name || item.name, item]));
+    const checkpointClassification = result.checkpoint_classification || result.loras?.[0]?.compatibility?.checkpoint;
+    state.models = state.models.map((item) => {
+      const name = item.comfy_name || item.name;
+      if (item.type === 'checkpoint' && name === (model.comfy_name || model.name) && checkpointClassification) {
+        return { ...item, family: checkpointClassification.family, variant: checkpointClassification.variant, classification: checkpointClassification };
+      }
+      const apiLora = state.loraCompatibility.get(name);
+      return item.type === 'lora' && apiLora ? { ...item, ...apiLora } : item;
+    });
+    const selectedCheckpoint = state.models.find((item) => item.type === 'checkpoint' && (item.comfy_name || item.name) === (model.comfy_name || model.name));
+    if (selectedCheckpoint && state.selected?.type === 'checkpoint' && (state.selected.comfy_name || state.selected.name) === (model.comfy_name || model.name)) {
+      state.selected = selectedCheckpoint;
+      renderModels(); renderSelected();
+    }
+    renderLoraOptions();
+  } catch (error) {
+    state.loraCompatibility.clear(); renderLoraOptions();
+  }
+}
 
 function renderSelected() {
   const holder = $('#selected-model');
@@ -70,7 +148,7 @@ function renderSelected() {
     setGenerationEnabled(false);
     return;
   }
-  $('#model-family-tag').textContent = familyName(state.selected.family);
+  $('#model-family-tag').textContent = classificationName(state.selected.classification || { family: state.selected.family, variant: state.selected.variant });
   renderNodeFlow();
   setGenerationEnabled(false);
   if (state.selected.type === 'profile') {
@@ -79,15 +157,22 @@ function renderSelected() {
   }
   const classificationOptions = [...state.profiles.values()].map((profile) => [profile.id, profile.name]);
   classificationOptions.push(['unknown', '不明']);
-  holder.innerHTML = `<span class="model-icon large">◈</span><div class="selected-model-info"><strong>${escapeHtml(state.selected.name)}</strong><small>${formatSize(state.selected.size)}</small></div><select class="family-select" id="family-select" aria-label="モデル系統">${classificationOptions.map(([value,label]) => `<option value="${escapeHtml(value)}" ${state.selected.family === value ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('')}</select>`;
-  $('#family-select').addEventListener('change', async (event) => {
+  const classification = state.selected.classification || {};
+  const variant = classification.variant || state.selected.variant || '';
+  const sourceLabel = classification.source === 'metadata' ? 'safetensors metadata' : classification.source === 'manual' ? '手動分類' : classification.source === 'filename' ? 'ファイル名候補' : '未判定';
+  holder.innerHTML = `<span class="model-icon large">◈</span><div class="selected-model-info"><strong>${escapeHtml(state.selected.name)}</strong><small>${formatSize(state.selected.size)} · 分類元: ${sourceLabel} (${classification.confidence || 'unknown'})</small></div><div class="classification-controls"><select class="family-select" id="family-select" aria-label="モデル系統">${classificationOptions.map(([value,label]) => `<option value="${escapeHtml(value)}" ${state.selected.family === value ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('')}</select><select class="variant-select" id="variant-select" aria-label="モデルvariant" ${state.selected.family !== 'sdxl' ? 'disabled' : ''}><option value="" ${!variant ? 'selected' : ''}>一般SDXL</option><option value="pony" ${variant === 'pony' ? 'selected' : ''}>Pony</option></select></div>`;
+  const saveClassification = async () => {
     try {
-      const updated = await api('/api/models/classify', { method: 'POST', body: JSON.stringify({ model: state.selected.comfy_name || state.selected.name, family: event.target.value }) });
+      const family = $('#family-select').value;
+      const selectedVariant = family === 'sdxl' ? $('#variant-select').value || null : null;
+      const updated = await api('/api/models/classify', { method: 'POST', body: JSON.stringify({ model: state.selected.comfy_name || state.selected.name, asset_type: 'checkpoint', family, variant: selectedVariant }) });
       state.selected = updated; state.models = state.models.map((model) => model.path === updated.path ? updated : model); renderModels(); renderSelected();
-      await loadModelProfile(updated);
-      showMessage('モデル系統を保存しました。', 'success');
+      await loadModelProfile(updated); await loadLoraCompatibility(updated);
+      showMessage('Checkpointの分類を保存しました。', 'success');
     } catch (error) { showMessage(error.message, 'error'); }
-  });
+  };
+  $('#family-select').addEventListener('change', () => { $('#variant-select').disabled = $('#family-select').value !== 'sdxl'; saveClassification(); });
+  $('#variant-select').addEventListener('change', saveClassification);
 }
 
 function renderFamilyFilters() {
@@ -308,6 +393,7 @@ async function loadModelProfile(model) {
     setGenerationEnabled(supported);
     if (!supported) showMessage(`${profile.name}の${selectedGenerationType()}は現在対応していません。`, 'info');
     else if (profile.ui?.model_components?.length && !selectedComponentsReady()) showMessage('Flux Workflow構成を利用できます。実行・保存にはComfyUIにFlux用モデル一式が必要です。', 'info');
+    await loadLoraCompatibility(model);
   } catch (error) {
     if (requestId !== state.profileRequest) return;
     $('#lora').disabled = true;
@@ -333,10 +419,7 @@ async function refresh() {
     state.comfyOnline = Boolean(status.comfy.online);
     state.profiles = new Map(profiles.map((profile) => [profile.id, profile]));
     renderFamilyFilters();
-    const lora = $('#lora');
-    const selectedLora = lora.value;
-    lora.innerHTML = '<option value="">使わない</option>' + models.filter((model) => model.type === 'lora').map((model) => `<option value="${escapeHtml(model.comfy_name || model.name)}">${escapeHtml(model.name)}</option>`).join('');
-    if ([...lora.options].some((option) => option.value === selectedLora)) lora.value = selectedLora;
+    renderLoraOptions();
     renderUpscaleModelOptions();
     $('#status-dot').classList.toggle('online', status.comfy.online);
     $('#status-label').textContent = status.comfy.online ? 'ComfyUI 接続中' : 'ComfyUI 未接続';
@@ -477,7 +560,7 @@ $('#copy-workflow').addEventListener('click', async () => {
 function renderDiagnosticAssets(models, kind) {
   const items = models.filter((item) => item.type === kind);
   if (!items.length) return '<p class="help-text">ComfyUI APIの認識一覧は0件です。</p>';
-  return `<ul class="diagnostic-assets">${items.map((item) => `<li><span>${escapeHtml(item.comfy_name || item.name)}</span><small>${formatSize(item.size)}${item.family ? ` · ${escapeHtml(familyName(item.family))}` : ''}${item.inventory_source === 'loader_enum' ? ' · Loader選択肢' : ''}</small></li>`).join('')}</ul>`;
+  return `<ul class="diagnostic-assets">${items.map((item) => `<li><span>${escapeHtml(item.comfy_name || item.name)}</span><small>${formatSize(item.size)}${item.family ? ` · ${escapeHtml(classificationName(item.classification || { family: item.family }))}` : ''}${item.classification ? ` · ${escapeHtml(item.classification.source)} / ${escapeHtml(item.classification.confidence)}` : ''}${item.inventory_source === 'loader_enum' ? ' · Loader選択肢' : ''}</small></li>`).join('')}</ul>`;
 }
 
 async function loadDiagnostics() {
@@ -489,7 +572,8 @@ async function loadDiagnostics() {
     state.comfyModels = data.models || state.comfyModels;
     renderUpscaleModelOptions();
     if (!data.online) {
-      $('#diagnostics-content').innerHTML = '<div class="diagnostic-warning">ComfyUIがオフラインです。接続設定と親機の起動状態を確認してください。</div>';
+      const issues = (data.issues || []).map((issue) => `<div class="diagnostic-issue ${escapeHtml(issue.severity.toLowerCase())}"><strong>${escapeHtml(issue.severity)}</strong><span>${escapeHtml(issue.message)}</span></div>`).join('');
+      $('#diagnostics-content').innerHTML = `${issues || ''}<div class="diagnostic-warning">ComfyUIがオフラインです。接続設定と親機の起動状態を確認してください。</div>`;
       $('#diagnostics-status').textContent = 'OFFLINE';
       return;
     }
@@ -514,7 +598,7 @@ async function loadDiagnostics() {
     const sd15 = data.sd15 || {};
     const misplacedLoras = data.checkpoint_metadata?.misplaced_loras || [];
     const misplacedLoraSummary = misplacedLoras.length
-      ? `Checkpointフォルダ内でLoRAのメタデータを検出（LoRA Loaderの認識対象外）: ${misplacedLoras.map((item) => escapeHtml(item.comfy_name || item.name)).join(', ')}`
+      ? `Checkpointフォルダ内にLoRA候補が${misplacedLoras.length}件あります（LoRA Loaderの認識対象外）。推奨保存先: models/loras。自動移動はしません。 ${misplacedLoras.map((item) => escapeHtml(item.comfy_name || item.name)).join(', ')}`
       : 'Checkpointフォルダ内にLoRAメタデータの候補はありません。';
     const sd15Summary = sd15.checkpoint_count
       ? `SD1.5として分類済み: ${sd15.checkpoint_count}件 (${(sd15.checkpoints || []).map(escapeHtml).join(', ')})`
@@ -524,11 +608,14 @@ async function loadDiagnostics() {
       ? `不足: ${flux.missing_assets.map(escapeHtml).join('、')}`
       : 'Profileが要求するFluxモデル構成を認識しています。';
     const packs = data.custom_nodes?.packs || [];
+    const issues = data.issues || [];
+    const issueHtml = issues.length ? issues.map((issue) => `<div class="diagnostic-issue ${escapeHtml(issue.severity.toLowerCase())}"><strong>${escapeHtml(issue.severity)}</strong><span>${escapeHtml(issue.message)}</span></div>`).join('') : '<p>確認された問題はありません。</p>';
     $('#diagnostics-content').innerHTML = `
-      <section class="diagnostic-summary"><strong>ComfyUI ${escapeHtml(server.version || 'version不明')} · ONLINE</strong><span>${escapeHtml(server.comfyui_root || '親機ルート不明')}</span><span>${escapeHtml(device.name || server.os || 'GPU情報不明')} · VRAM ${vram}</span><small>モデル一覧: 親機ComfyUI API · ノード型 ${data.node_count ?? 0}</small></section>
+      <section class="diagnostic-summary"><strong>ComfyUI ${escapeHtml(server.version || 'version不明')} · ONLINE</strong><span>URL: ${escapeHtml(server.url || data.url || '不明')}</span><span>親機ルート: ${escapeHtml(server.comfyui_root || '不明')}</span><span>GPU: ${escapeHtml(device.name || server.os || '不明')} · VRAM ${vram}</span><span>Python ${escapeHtml(server.python_version || '不明')} · PyTorch ${escapeHtml(server.pytorch_version || '不明')}</span><small>モデル一覧: 親機ComfyUI API · ノード型 ${data.node_count ?? 0}</small></section>
+      <section><h3>診断結果</h3><div class="diagnostic-issues">${issueHtml}</div></section>
       <section><h3>Upscale 実行要件</h3><ul class="diagnostic-nodes">${requiredNodes}</ul>${upscaleHint}</section>
       <section><h3>モデル棚卸し</h3>${modelSections}</section>
-      <section><h3>SD1.5確認</h3><p>${sd15Summary}</p><p class="help-text">未分類Checkpointは名前だけでSD1.5と判断せず、必要ならユーザーが分類してください。</p><p>${misplacedLoraSummary}</p></section>
+      <section><h3>SD1.5確認</h3><p>対応Workflow: 実装済み · 実Checkpoint: ${sd15.checkpoint_count || 0}件 · 実機確認: ${sd15.checkpoint_count ? '可能' : '未実施'}</p><p>${sd15Summary}</p><p class="help-text">未分類Checkpointは名前だけでSD1.5と判断せず、必要ならユーザーが分類してください。</p><p>${misplacedLoraSummary}</p></section>
       <section><h3>Flux不足</h3><p>${fluxSummary}</p>${Object.entries(flux.available_components || {}).map(([key, names]) => `<p class="help-text">${escapeHtml(key)}: ${names.length ? names.map(escapeHtml).join(', ') : '認識なし'}</p>`).join('')}</section>
       <section><h3>ComfyUI登録済みCustom Node</h3><p>${data.custom_nodes?.pack_count ?? 0} packs · ${data.custom_nodes?.node_count ?? 0} node types</p><p class="help-text">object_infoのpython_moduleから集計しています。</p><ul class="diagnostic-assets">${packs.map((pack) => `<li><span>${escapeHtml(pack.name)}</span><small>${pack.node_count} nodes</small></li>`).join('') || '<li><span>登録済みCustom Nodeなし</span></li>'}</ul></section>
       <section><h3>親機モデル保存先</h3><ul class="diagnostic-paths">${folderDetails || '<li>ComfyUI APIから保存先一覧を取得できません。</li>'}</ul></section>`;
@@ -556,7 +643,7 @@ document.querySelectorAll('input[name="generation_type"]').forEach((radio) => ra
 $('#input-image-file').addEventListener('change', (event) => { const file = event.target.files?.[0]; if (file) uploadInputImage(file); });
 $('#remove-input-image').addEventListener('click', () => { clearInputImage(); showMessage('入力画像の選択を解除しました。', 'info'); });
 $('#denoise').addEventListener('input', () => { $('#denoise-value').value = Number($('#denoise').value).toFixed(2); $('#denoise-value').textContent = Number($('#denoise').value).toFixed(2); });
-$('#lora').addEventListener('change', renderNodeFlow);
+$('#lora').addEventListener('change', () => { renderNodeFlow(); renderLoraCompatibility(); });
 $('#upscale-model').addEventListener('change', () => { updateUpscaleEstimate(); renderUpscaleSelection(); setGenerationEnabled(true); });
 $('#settings-open').addEventListener('click', () => $('#settings-dialog').showModal());
 $('#diagnostics-open').addEventListener('click', () => { $('#diagnostics-dialog').showModal(); loadDiagnostics(); });

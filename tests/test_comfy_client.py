@@ -147,6 +147,35 @@ class ComfyClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(upscale["inventory_source"], "model_folder")
         self.assertTrue(upscale["recognized"])
 
+    async def test_available_models_classifies_checkpoint_and_lora_from_parent_metadata(self):
+        def handler(request):
+            path = request.url.path
+            if path == "/experiment/models":
+                return httpx.Response(200, json=[{"name": "checkpoints"}, {"name": "loras"}])
+            if path == "/experiment/models/checkpoints":
+                return httpx.Response(200, json=[{"name": "mystery.safetensors"}])
+            if path == "/experiment/models/loras":
+                return httpx.Response(200, json=[{"name": "style.safetensors"}])
+            if path == "/view_metadata/checkpoints":
+                return httpx.Response(200, json={"modelspec.architecture": "stable-diffusion-xl-v1-base"})
+            if path == "/view_metadata/loras":
+                return httpx.Response(200, json={"ss_base_model_version": "sdxl", "modelspec.title": "Pony style"})
+            return httpx.Response(404)
+        transport = httpx.MockTransport(handler)
+        original = httpx.AsyncClient
+
+        def client_factory(*args, **kwargs):
+            return original(*args, **{**kwargs, "transport": transport})
+
+        with patch("app.services.comfy_client.httpx.AsyncClient", side_effect=client_factory):
+            result = await ComfyClient("http://localhost:8188").available_models()
+        checkpoint = next(item for item in result if item["type"] == "checkpoint")
+        lora = next(item for item in result if item["type"] == "lora")
+        self.assertEqual(checkpoint["classification"]["family"], "sdxl")
+        self.assertEqual(checkpoint["classification"]["source"], "metadata")
+        self.assertEqual(lora["classification"]["variant"], "pony")
+        self.assertEqual(lora["metadata_role"], "lora")
+
     async def test_diagnostics_reads_checkpoint_metadata_and_flags_misfiled_lora(self):
         folder_names = ["checkpoints", "upscale_models"]
         folder_paths = {

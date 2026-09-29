@@ -20,13 +20,20 @@ class ModelsApiTests(unittest.TestCase):
         self.assertIn('id="build-button"', response.text)
         self.assertIn('id="run-button"', response.text)
 
-    def test_models_endpoint_returns_scanned_models(self):
+    def test_models_endpoint_uses_parent_comfy_api_inventory(self):
         models = [{"name": "base.safetensors", "comfy_name": "base.safetensors", "type": "checkpoint", "size": 10,
-                   "path": "C:/models/base.safetensors", "modified": "2026-01-01T00:00:00+09:00", "family": "sdxl"}]
-        with patch("app.main.scan_models", return_value=models), patch("app.main.current_root", return_value="C:/ComfyUI"):
-            response = TestClient(app).get("/api/models")
+                   "path": "comfy-api:checkpoint:base.safetensors", "modified": None, "family": "sdxl", "source": "comfy_api"}]
+        with patch("app.main.client") as client_factory, patch("app.main.get_settings", return_value={}), \
+             patch("app.main._models_cache_at", 0.0), patch("app.main._models_cache_url", ""):
+            client_factory.return_value.available_models = AsyncMock(return_value=models)
+            client_factory.return_value.base_url = "https://parent-comfy"
+            client = TestClient(app)
+            response = client.get("/api/models")
+            second = client.get("/api/comfy/models")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()[0]["family"], "sdxl")
+        self.assertEqual(second.status_code, 200)
+        client_factory.return_value.available_models.assert_awaited_once()
 
     def test_model_profile_endpoints_return_defaults_and_capabilities(self):
         client = TestClient(app)
@@ -63,6 +70,19 @@ class ModelsApiTests(unittest.TestCase):
             response = TestClient(app).post("/api/models/classify", json={"model": model["comfy_name"], "family": "flux"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["family"], "flux")
+
+    def test_manual_lora_classification_is_saved_with_source(self):
+        model = {"name": "style.safetensors", "comfy_name": "style.safetensors", "type": "lora", "family": "unknown"}
+        with patch("app.main.scan_current_models", new=AsyncMock(return_value=[model])), \
+             patch("app.main.get_settings", return_value={}), \
+             patch("app.main.save_settings", side_effect=lambda value: value) as save:
+            response = TestClient(app).post("/api/models/classify", json={
+                "model": model["comfy_name"], "asset_type": "lora", "family": "sdxl", "variant": "pony",
+            })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["classification"]["source"], "manual")
+        self.assertEqual(response.json()["classification"]["variant"], "pony")
+        self.assertEqual(save.call_args.args[0]["model_classifications"]["lora:style.safetensors"]["family"], "sdxl")
 
     def test_image_endpoint_rejects_path_traversal(self):
         response = TestClient(app).get("/api/comfy/image", params={"filename": "image.png", "subfolder": "../private"})
