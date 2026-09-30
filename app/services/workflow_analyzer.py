@@ -64,7 +64,8 @@ SUPPORTED_NODE_TYPES = set(NODE_WIDGET_ORDER) | {
     "SaveImage", "PreviewImage", "EmptyLatentImage", "EmptySD3LatentImage",
     "Note", "PrimitiveNode", "Reroute",
 }
-UI_ONLY_NODE_TYPES = {"Note", "PrimitiveNode", "Reroute"}
+UI_ONLY_NODE_TYPES = {"Note", "MarkdownNote", "PrimitiveNode", "Reroute"}
+SUPPORTED_NODE_TYPES |= UI_ONLY_NODE_TYPES
 
 
 def _normal_name(value: str) -> str:

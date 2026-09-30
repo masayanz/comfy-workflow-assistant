@@ -14,6 +14,7 @@ ComfyUI初心者から初級・中級ユーザー向けの、ローカルで動�
 - SD1.5 / SDXL txt2img、SDXL img2img、画像アップスケールのWorkflow生成、JSON保存、ComfyUI実行、生成画像表示
 - 上記WorkflowのComfyUIキャンバス用JSON保存（API Promptとは別形式）
 - 既存のComfyUI UI Workflow / API Prompt JSONの読み込みと読み取り専用解析
+- 既存UI WorkflowのCheckpoint / LoRA / 生成設定 / 解像度の部分編集、差分確認、別名保存、明示Queue実行
 - 1つまでのLoRA選択と適用強度の調整
 - `model_profiles/` で管理するモデル別デフォルト値と対応機能
 - ComfyUIルートフォルダとAPI URLの設定
@@ -24,7 +25,7 @@ ComfyUI初心者から初級・中級ユーザー向けの、ローカルで動�
 
 Workflow生成時は、ComfyUIキャンバスに読み込んで編集する `.workflow.json` と、ComfyUI APIへ送信する `.api.json` を別々に保存できます。どちらも`generated_workflows/`に保存され、ブラウザにもダウンロードされます。
 
-既存JSONはWeb UIの「既存Workflowを解析」から読み込めます。形式、ノード、リンク、モデル、生成パラメータ、処理概要を表示し、親ComfyUIの`/object_info`とモデル一覧に照合します。読み込みは解析のみで、Queue送信やJSONの変更は行いません。親機に接続できない場合は、モデルとノードの状態を「照合不明」とします。Custom Nodeを含むWorkflowも読み込めますが、足りないノードの表示と概要解析までで、そのWorkflowの実行や編集には対応していません。RTX 3060 12GB向け注意は解像度やノード構成からの目安で、VRAM使用量の数値予測ではありません。
+既存JSONはWeb UIの「既存Workflowを解析」から読み込めます。形式、ノード、リンク、モデル、生成パラメータ、処理概要を表示し、親ComfyUIの`/object_info`とモデル一覧に照合します。解析は読み取り専用です。「このWorkflowを編集」を押した場合だけブラウザー内に編集用コピーを作り、Checkpoint、既存LoRA、Seed、Steps、CFG、Sampler、Scheduler、img2imgのDenoise、既知のLatent解像度を部分patchできます。LoRA Loaderの削除では既知のMODEL / CLIP接続をバイパスします。原本は上書きせず、`*.edited.workflow.json`としてダウンロードします。Custom Nodeや対象外ノードのデータは保持しますが、編集・API変換できないWorkflowはQueue実行できません。Queue送信は明示ボタンと確認ダイアログの後に限ります。親機に接続できない場合はモデルとノードを照合不明とし、Sampler / Schedulerの選択肢を取得できない場合はその項目を編集できません。RTX 3060 12GB向け注意は解像度やノード構成からの目安で、VRAM使用量の数値予測ではありません。
 
 SD1.5、SDXL、Fluxの解像度・Steps・CFG・Sampler・Schedulerの既定値は `model_profiles/` のJSONで管理します。Flux ProfileはUNET、2つのText Encoder、VAEを個別に選択します。必要なFluxモデルがComfyUIにない場合もAPI PromptとUI Workflowの未設定プレビューを作れますが、保存とQueue実行は必要なモデルが揃うまで無効です。CheckpointまたはProfileを選ぶとBackendから設定を読み込み、画面へ反映します。
 
@@ -58,6 +59,8 @@ ComfyUIは既定で `http://127.0.0.1:8188` に接続します。自動検出さ
 
 既存Workflowを確認する場合は、プレビュー欄の「ComfyUI Workflow JSON」からファイルを選んで「Workflowを読み込んで解析」をクリックします。対応形式はComfyUI UI Workflow JSONとAPI Prompt JSONです。結果の「ComfyUIを開く」からComfyUIを開き、編集する場合はキャンバスのLoadから元JSONを選んでください。
 
+既存UI Workflowをアプリ内で部分編集する場合は、解析結果の「このWorkflowを編集」をクリックします。値を変更したら「変更を適用して差分を確認」で差分とValidationを確認し、`新しいWorkflowとして保存`で別ファイルへ出力します。Queue実行は`ComfyUIでテスト生成`を押し、確認ダイアログで送信を承認します。Checkpoint / LoRAの在庫、互換性、Sampler / Scheduler候補は親ComfyUIから取得します。API Prompt JSONは解析のみで、キャンバスWorkflowとしての編集には対応していません。
+
 Image to Imageを選び、画像をアップロードすると、入力画像のサイズをそのまま使います。「変化の強さ」は`denoise`（0.0〜1.0）で、低いほど元画像に近い結果になります。
 
 ComfyUI側に各Workflowで使うノードが必要です。Upscaleでは`LoadImage`、`UpscaleModelLoader`、`ImageUpscaleWithModel`、`SaveImage`を確認します。独自ノードを使うWorkflowは解析で一覧表示できますが、アプリからの実行・編集は未対応です。
@@ -86,6 +89,8 @@ Web UIポートと起動時のブラウザ表示も設定できます。ポー�
 - `GET /api/settings` / `PUT /api/settings`
 - `POST /api/workflow/build`
 - `POST /api/workflow/import`（multipartの`file`でJSONを受け取り、実行せず解析）
+- `POST /api/workflow/edit/prepare` / `POST /api/workflow/edit/apply`（部分patchと差分・Validation）
+- `POST /api/workflow/edit/queue`（明示的な編集Workflow Queue送信）
 - `POST /api/uploads/image`
 - `POST /api/workflow/save`
 - `POST /api/workflow/save-ui`

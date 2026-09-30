@@ -85,6 +85,12 @@
       <div id="result" class="result hidden"><h3>生成結果</h3><div id="result-images" class="result-images"></div><p id="result-meta" class="result-meta"></p><button id="regenerate-button" class="button secondary full">同じ設定で再生成</button></div>
     </aside>
   </main>
+  <dialog id="workflow-edit-queue-dialog" class="workflow-edit-dialog">
+    <h2>このWorkflowを親ComfyUIへ送信します</h2>
+    <p>編集した設定を再検証し、API Promptへ変換してQueueへ登録します。外部Workflowはこの確認後にのみ実行されます。</p>
+    <p id="workflow-edit-queue-summary" class="help-text"></p>
+    <div class="dialog-actions"><button class="button secondary" id="workflow-edit-queue-cancel" type="button">戻る</button><button class="button primary" id="workflow-edit-queue-confirm" type="button">Queueに送信</button></div>
+  </dialog>
   <dialog id="settings-dialog"><form method="dialog" id="settings-form"><div class="section-heading"><div><p class="eyebrow">SETTINGS</p><h2>接続設定</h2></div><button class="icon-button" value="cancel" aria-label="閉じる">×</button></div><label class="field-label">ComfyUI API URL<input id="comfy-url" type="url" value="http://127.0.0.1:8188"></label><label class="field-label">ComfyUIルートフォルダ<input id="comfy-path" type="text" placeholder="例：C:\\ComfyUI（自動検出時は空欄）"></label><div class="dialog-field-row"><label class="field-label">Web UIポート<input id="web-port" type="number" min="1024" max="65535" value="7865"></label><label class="check-label"><input id="open-browser" type="checkbox" checked>起動時にブラウザを開く</label></div><p class="help-text">ルートフォルダには models フォルダが必要です。ポートの変更はアプリを再起動すると反映されます。Stability Matrixの場合もComfyUIパッケージのフォルダを指定してください。</p><div class="dialog-actions"><button class="button secondary" value="cancel">キャンセル</button><button class="button primary" id="settings-save" value="save">保存して再スキャン</button></div></form></dialog>
   <dialog id="diagnostics-dialog" class="diagnostics-dialog"><div class="section-heading"><div><p class="eyebrow">ENVIRONMENT</p><h2>親機ComfyUI診断</h2></div><button class="icon-button" id="diagnostics-close" type="button" aria-label="閉じる">×</button></div><div class="diagnostics-actions"><button class="button secondary" id="diagnostics-refresh" type="button">再取得</button><span id="diagnostics-status" class="help-text"></span></div><div id="diagnostics-content" class="diagnostics-content"><div class="empty-state">ComfyUIへ問い合わせています…</div></div></dialog>
   <script src="/static/js/app.js" defer></script>

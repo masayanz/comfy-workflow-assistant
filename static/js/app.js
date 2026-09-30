@@ -1,4 +1,4 @@
-const state = { models: [], comfyModels: [], profiles: new Map(), loraCompatibility: new Map(), family: 'all', selected: null, activeProfile: null, profileRequest: 0, lastPayload: null, inputImage: null, isRunning: false, comfyOnline: false, comfyUrl: '', diagnostics: null, importedWorkflowFile: null };
+const state = { models: [], comfyModels: [], profiles: new Map(), loraCompatibility: new Map(), family: 'all', selected: null, activeProfile: null, profileRequest: 0, lastPayload: null, inputImage: null, isRunning: false, comfyOnline: false, comfyUrl: '', diagnostics: null, importedWorkflowFile: null, importedWorkflowRaw: '', workflowEdit: null };
 const $ = (selector) => document.querySelector(selector);
 
 async function api(path, options = {}) {
@@ -8,7 +8,8 @@ async function api(path, options = {}) {
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
     const detail = body.detail;
-    throw new Error(typeof detail === 'object' ? (detail.message || JSON.stringify(detail)) : (detail || `通信に失敗しました (${response.status})`));
+    const detailMessage = typeof detail === 'object' && detail ? [detail.message, ...(detail.blockers || [])].filter(Boolean).join('\n') : detail;
+    throw new Error(detailMessage || `通信に失敗しました (${response.status})`);
   }
   return body;
 }
@@ -98,9 +99,134 @@ function renderWorkflowAnalysis(data) {
     <details><summary>認識した生成パラメータ</summary><pre>${escapeHtml(parameters)}</pre></details>
     ${data.vram_warnings?.length ? `<section><h4>RTX 3060 12GB向け注意</h4><ul class="analysis-list">${data.vram_warnings.map((item) => `<li class="analysis-warning">${escapeHtml(item)}</li>`).join('')}</ul><p>VRAM使用量の数値予測ではありません。</p></section>` : ''}
     ${warningRows ? `<section><h4>確認事項</h4><ul class="analysis-list">${warningRows}</ul></section>` : ''}
-    <div class="analysis-actions"><button class="button secondary analysis-download" type="button">読み込んだJSONをダウンロード</button><button class="button secondary analysis-open-comfy" type="button" ${state.comfyUrl ? '' : 'disabled'}>ComfyUIを開く</button><button class="button secondary analysis-open-diagnostics" type="button">環境診断を開く</button></div>
+    <div class="analysis-actions"><button class="button secondary analysis-download" type="button">読み込んだJSONをダウンロード</button>${data.workflow_type === 'comfyui_ui_workflow' ? '<button class="button primary analysis-edit-workflow" type="button">このWorkflowを編集</button>' : ''}<button class="button secondary analysis-open-comfy" type="button" ${state.comfyUrl ? '' : 'disabled'}>ComfyUIを開く</button><button class="button secondary analysis-open-diagnostics" type="button">環境診断を開く</button></div>
+    <div id="workflow-editor" class="workflow-editor hidden"></div>
     <p class="help-text">解析のみ実行しました。Queueへの送信やWorkflowの変更は行っていません。ComfyUIで編集する場合は、キャンバスのWorkflow読み込みからJSONを選択してください。</p>`;
   holder.classList.remove('hidden');
+}
+
+function editStatusLabel(status) {
+  return ({ compatible: '互換', compatible_with_warning: '要確認', incompatible: '非互換', unknown: 'Unknown' })[status] || '未判定';
+}
+
+function editFieldControl(field, value = field.value) {
+  const key = escapeHtml(field.key);
+  const nodeId = escapeHtml(field.node_id);
+  const semantic = escapeHtml(field.field);
+  const title = escapeHtml(field.node_title || `${field.node_type} · ID ${field.source_node_id || field.node_id}`);
+  let input;
+  if (Array.isArray(field.options)) {
+    const current = String(value ?? '');
+    const options = field.options.map((option) => (typeof option === 'string' ? { value: option, name: option } : option));
+    if (current && !options.some((item) => String(item.value) === current)) {
+      options.unshift({ value: current, name: `${current} (親ComfyUI在庫に見つかりません)` });
+    }
+    const statusFor = (option) => {
+      const statuses = field.field === 'checkpoint' ? (option.lora_compatibility || []) : (option.compatibility || []);
+      if (statuses.includes('incompatible')) return 'incompatible';
+      if (statuses.includes('compatible_with_warning')) return 'compatible_with_warning';
+      return statuses.length ? 'compatible' : 'unknown';
+    };
+    input = `<select data-edit-key="${key}" data-edit-node="${nodeId}" data-edit-field="${semantic}" ${field.field === 'lora' && state.workflowEdit?.removed.has(nodeId) ? 'disabled' : ''}>${options.map((option) => {
+      const status = statusFor(option);
+      const family = option.classification?.variant === 'pony' ? 'Pony / ' : '';
+      const familyText = option.family && option.family !== 'unknown' ? ` · ${family}${familyName(option.family)}` : '';
+      const statusText = field.field === 'checkpoint' || field.field === 'lora' ? ` · ${editStatusLabel(status)}` : '';
+      return `<option value="${escapeHtml(option.value)}" ${String(option.value) === current ? 'selected' : ''}>${escapeHtml(option.name || option.value)}${escapeHtml(familyText)}${escapeHtml(statusText)}</option>`;
+    }).join('')}</select>`;
+  } else if (field.value_type === 'number') {
+    if (field.field === 'seed') {
+      input = `<input type="text" inputmode="numeric" pattern="[0-9]*" data-edit-key="${key}" data-edit-node="${nodeId}" data-edit-field="${semantic}" value="${escapeHtml(value)}">`;
+    } else {
+      const range = { steps: 'min="1" max="150" step="1"', cfg: 'min="0" max="50" step="any"', denoise: 'min="0" max="1" step="any"', width: 'min="64" max="4096" step="1"', height: 'min="64" max="4096" step="1"', strength_model: 'min="-2" max="2" step="any"', strength_clip: 'min="-2" max="2" step="any"' }[field.field] || '';
+      input = `<input type="number" ${range} data-edit-key="${key}" data-edit-node="${nodeId}" data-edit-field="${semantic}" value="${escapeHtml(value)}">`;
+    }
+  } else {
+    input = `<input type="text" data-edit-key="${key}" data-edit-node="${nodeId}" data-edit-field="${semantic}" value="${escapeHtml(value)}">`;
+  }
+  const compat = field.compatibility?.length ? `<small class="edit-compatibility">現在のCheckpointとの互換性: ${field.compatibility.map((item) => `${escapeHtml(item.checkpoint)} ${escapeHtml(editStatusLabel(item.status))}`).join(' / ')}</small>` : '';
+  const unavailable = ['sampler', 'scheduler'].includes(field.field) && !Array.isArray(field.options) ? '<small class="edit-unavailable">親ComfyUIから選択肢を取得できないため、編集できません。</small>' : '';
+  if (unavailable) input = `<input type="text" disabled value="${escapeHtml(value)}">`;
+  return `<label class="workflow-edit-field"><span>${escapeHtml(field.label)} <small>${title}</small></span>${input}${compat}${unavailable}</label>`;
+}
+
+function currentEditValue(field) {
+  return document.querySelector(`[data-edit-key="${CSS.escape(field.key)}"]`)?.value ?? String(field.value ?? '');
+}
+
+function collectWorkflowEditPatches() {
+  const edit = state.workflowEdit;
+  if (!edit) return [];
+  const operations = [];
+  for (const field of edit.manifest.fields) {
+    if (field.field === 'remove_lora') {
+      if (edit.removed.has(String(field.node_id))) {
+        operations.push({ node_id: String(field.node_id), field: 'remove_lora', expected_old: field.value, new_value: true });
+      }
+      continue;
+    }
+    if (field.field === 'lora' && edit.removed.has(String(field.node_id))) continue;
+    const value = currentEditValue(field);
+    if (String(value) !== String(field.value)) {
+      operations.push({ node_id: String(field.node_id), field: field.field, expected_old: field.value, new_value: value });
+    }
+  }
+  return operations;
+}
+
+function renderWorkflowEditValidation(validation, diff, patchCount) {
+  const blockers = (validation?.blockers || []).map((item) => `<li class="edit-blocker">${escapeHtml(item)}</li>`).join('');
+  const warnings = (validation?.warnings || []).map((item) => `<li class="edit-warning">${escapeHtml(item)}</li>`).join('');
+  const changes = (diff || []).map((item) => `<li><span>${escapeHtml(item.node_title || item.label)} · ${escapeHtml(item.label)}</span><strong>${escapeHtml(item.old)} → ${escapeHtml(item.new)}</strong></li>`).join('');
+  const holder = $('#workflow-edit-validation');
+  if (!holder) return;
+  holder.innerHTML = `<section><h4>変更差分</h4>${changes ? `<ul class="analysis-list">${changes}</ul>` : '<p>変更はありません。</p>'}</section>
+    <section><h4>保存前Validation</h4><p class="${validation?.can_save ? 'edit-ok' : 'edit-error'}">${validation?.can_save ? '保存可能' : '保存できません'}</p>
+      ${blockers ? `<ul class="analysis-list">${blockers}</ul>` : ''}${warnings ? `<ul class="analysis-list">${warnings}</ul>` : '<p>警告はありません。</p>'}</section>`;
+  const save = $('#workflow-edit-save');
+  const queue = $('#workflow-edit-queue');
+  save.disabled = !validation?.can_save || patchCount === 0 || state.workflowEdit.dirty;
+  queue.disabled = !validation?.can_queue || patchCount === 0 || state.workflowEdit.dirty || state.isRunning;
+}
+
+function renderWorkflowEditor(manifest) {
+  const holder = $('#workflow-editor');
+  const edit = state.workflowEdit;
+  if (!holder || !edit) return;
+  const fields = manifest.fields || [];
+  if (!manifest.editable || !fields.length) {
+    holder.innerHTML = '<p class="edit-unavailable">解析できますが、このWorkflowには安全に編集できる既知の設定項目がありません。</p>';
+    holder.classList.remove('hidden');
+    return;
+  }
+  const loraRemovals = fields.filter((field) => field.field === 'remove_lora');
+  const loraRows = loraRemovals.map((removeField) => {
+    const nodeId = String(removeField.node_id);
+    const loraField = fields.find((field) => field.node_id === nodeId && field.field === 'lora');
+    const weights = fields.filter((field) => field.node_id === nodeId && ['strength_model', 'strength_clip'].includes(field.field));
+    const removed = edit.removed.has(nodeId);
+    return `<article class="workflow-edit-group lora-edit-group ${removed ? 'removed' : ''}"><div class="workflow-edit-group-title"><strong>${escapeHtml(removeField.node_title || 'LoRA Loader')}</strong><small>${escapeHtml(removeField.lora_name)}</small></div>
+      ${loraField ? editFieldControl(loraField) : '<p class="edit-unavailable">LoRA名は編集未対応です。</p>'}${weights.map((field) => editFieldControl(field)).join('')}
+      <button class="text-button workflow-edit-remove-lora" type="button" data-node-id="${escapeHtml(nodeId)}" ${removed ? 'disabled' : ''}>${removed ? '削除対象に設定済み' : 'このLoRAを削除'}</button></article>`;
+  }).join('');
+  const loraKeys = new Set(loraRemovals.map((field) => String(field.node_id)));
+  const otherFields = fields.filter((field) => field.field !== 'remove_lora' && !(['lora', 'strength_model', 'strength_clip'].includes(field.field) && loraKeys.has(String(field.node_id))));
+  const checkpointFields = otherFields.filter((field) => field.field === 'checkpoint');
+  const samplerFields = otherFields.filter((field) => ['seed', 'steps', 'cfg', 'sampler', 'scheduler', 'denoise'].includes(field.field));
+  const resolutionFields = otherFields.filter((field) => ['width', 'height'].includes(field.field));
+  const renderGroup = (title, entries, className = '') => entries.length ? `<section><h4>${title}</h4><div class="workflow-edit-grid ${className}">${entries.map((field) => editFieldControl(field)).join('')}</div></section>` : '';
+  holder.innerHTML = `<div class="workflow-edit-header"><strong>編集用コピー</strong><span>原本はブラウザー内に保持し、変更は明示した項目だけに適用します。</span></div>
+    ${renderGroup('Checkpoint', checkpointFields, 'single')}
+    ${loraRows ? `<section><h4>LoRA</h4><div class="workflow-edit-loras">${loraRows}</div></section>` : ''}
+    ${renderGroup('Sampler / 生成設定', samplerFields, 'two')}
+    ${renderGroup('解像度', resolutionFields, 'two')}
+    ${(manifest.unsupported_fields || []).length ? `<details><summary>編集未対応の項目 (${manifest.unsupported_fields.length})</summary><ul class="analysis-list">${manifest.unsupported_fields.map((item) => `<li>${escapeHtml(item.node_type)} · ${escapeHtml(item.field)} · ${escapeHtml(item.reason)}</li>`).join('')}</ul></details>` : ''}
+    <div class="workflow-edit-actions"><button class="button primary" id="workflow-edit-apply" type="button">変更を適用して差分を確認</button><button class="button secondary" id="workflow-edit-reset" type="button">変更をすべて元に戻す</button></div>
+    <div id="workflow-edit-validation" class="workflow-edit-validation"><p class="help-text">変更を適用すると、保存前Validationと差分が表示されます。</p></div>
+    <div class="workflow-edit-actions"><button class="button secondary" id="workflow-edit-save" type="button" disabled>新しいWorkflowとして保存</button><button class="button primary" id="workflow-edit-queue" type="button" disabled>ComfyUIでテスト生成</button></div>
+    <p class="help-text">未対応ノードは変更せず保持します。Queue実行は確認ダイアログで明示的に承認するまで行いません。</p>`;
+  holder.classList.remove('hidden');
+  if (edit.result) renderWorkflowEditValidation(edit.result.validation, edit.result.diff, edit.result.patch_count);
 }
 
 function loraCompatibilityLabel(status) {
@@ -193,7 +319,7 @@ function renderSelected() {
   }
   $('#model-family-tag').textContent = classificationName(state.selected.classification || { family: state.selected.family, variant: state.selected.variant });
   renderNodeFlow();
-  setGenerationEnabled(false);
+  setGenerationEnabled(Boolean(state.activeProfile?.enabled && state.activeProfile.capabilities[selectedGenerationType()]));
   if (state.selected.type === 'profile') {
     holder.innerHTML = `<span class="model-icon large">◈</span><div class="selected-model-info"><strong>${escapeHtml(state.selected.name)}</strong><small>ComfyUIにある個別モデルを下で指定してください</small></div>`;
     return;
@@ -714,6 +840,8 @@ $('#save-ui-button').addEventListener('click', (event) => saveWorkflow('/api/wor
 $('#save-api-button').addEventListener('click', (event) => saveWorkflow('/api/workflow/save', event.currentTarget, 'API Prompt'));
 $('#workflow-import-file').addEventListener('change', () => {
   state.importedWorkflowFile = null;
+  state.importedWorkflowRaw = '';
+  state.workflowEdit = null;
   $('#workflow-analysis').classList.add('hidden');
   $('#workflow-analysis').replaceChildren();
 });
@@ -728,10 +856,13 @@ $('#workflow-import-button').addEventListener('click', async (event) => {
   button.disabled = true;
   button.textContent = '親ComfyUIと照合中…';
   try {
+    const originalRaw = await file.text();
     const form = new FormData();
     form.append('file', file, file.name);
     const result = await api('/api/workflow/import', { method: 'POST', body: form });
     state.importedWorkflowFile = file;
+    state.importedWorkflowRaw = originalRaw;
+    state.workflowEdit = null;
     renderWorkflowAnalysis(result);
     showMessage('Workflowの読み込みと解析が完了しました。Queueへは送信していません。', result.valid ? 'success' : 'info');
   } catch (error) {
@@ -741,7 +872,148 @@ $('#workflow-import-button').addEventListener('click', async (event) => {
     button.textContent = 'Workflowを読み込んで解析';
   }
 });
+
+async function prepareWorkflowEditor() {
+  if (!state.importedWorkflowRaw) { showMessage('先にWorkflow JSONを読み込んでください。', 'error'); return; }
+  try {
+    showMessage('編集できる項目を親ComfyUIと照合しています…', 'info');
+    const manifest = await api('/api/workflow/edit/prepare', {
+      method: 'POST', body: JSON.stringify({ workflow_json: state.importedWorkflowRaw }),
+    });
+    state.workflowEdit = {
+      originalRaw: state.importedWorkflowRaw,
+      fileName: state.importedWorkflowFile?.name || 'workflow.json',
+      manifest, removed: new Set(), patches: [], result: null, dirty: true,
+    };
+    renderWorkflowEditor(manifest);
+    showMessage(manifest.editable ? '編集用コピーを作成しました。原本は変更していません。' : (manifest.reason || 'このWorkflowの編集に対応していません。'), manifest.editable ? 'success' : 'info');
+  } catch (error) { showMessage(error.message, 'error'); }
+}
+
+function workflowEditorChanged() {
+  const edit = state.workflowEdit;
+  if (!edit) return;
+  edit.dirty = true;
+  const message = $('#workflow-edit-validation');
+  if (message && !message.querySelector('.edit-dirty')) {
+    message.insertAdjacentHTML('afterbegin', '<p class="edit-dirty">未反映の変更があります。「変更を適用して差分を確認」を押してください。</p>');
+  }
+  if (edit.result) renderWorkflowEditValidation(edit.result.validation, edit.result.diff, edit.result.patch_count);
+  else {
+    $('#workflow-edit-save').disabled = true;
+    $('#workflow-edit-queue').disabled = true;
+  }
+}
+
+async function applyWorkflowEditor() {
+  const edit = state.workflowEdit;
+  if (!edit || !state.importedWorkflowRaw) return;
+  const button = $('#workflow-edit-apply');
+  button.disabled = true;
+  try {
+    const patches = collectWorkflowEditPatches();
+    const result = await api('/api/workflow/edit/apply', {
+      method: 'POST', body: JSON.stringify({ workflow_json: edit.originalRaw, patches }),
+    });
+    edit.patches = patches;
+    edit.result = result;
+    edit.dirty = false;
+    const staleMessage = $('#workflow-edit-validation .edit-dirty');
+    staleMessage?.remove();
+    renderWorkflowEditValidation(result.validation, result.diff, result.patch_count);
+    showMessage(result.validation.can_save ? '変更を適用しました。差分とValidationを確認してください。' : '変更内容に問題があります。保存前Validationを確認してください。', result.validation.can_save ? 'success' : 'error');
+  } catch (error) { showMessage(error.message, 'error'); }
+  finally { button.disabled = false; }
+}
+
+async function resetWorkflowEditor() {
+  const edit = state.workflowEdit;
+  if (!edit) return;
+  edit.removed.clear();
+  edit.patches = [];
+  edit.result = null;
+  edit.dirty = false;
+  renderWorkflowEditor(edit.manifest);
+  await applyWorkflowEditor();
+  showMessage('編集用コピーを原本から作り直しました。', 'info');
+}
+
+function downloadEditedWorkflow() {
+  const edit = state.workflowEdit;
+  if (!edit?.result?.validation?.can_save || edit.dirty || !edit.result.patch_count) return;
+  const originalName = edit.fileName.replace(/\.(?:workflow\.)?json$/i, '');
+  const filename = `${originalName || 'workflow'}.edited.workflow.json`;
+  const blob = new Blob([edit.result.workflow_json], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url; link.download = filename; link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  showMessage(`原本を残して新しいWorkflowを保存しました: ${filename}`, 'success');
+}
+
+function openWorkflowEditQueueDialog() {
+  const edit = state.workflowEdit;
+  if (!edit?.result?.validation?.can_queue || edit.dirty || state.isRunning) return;
+  const details = edit.result.diff.map((item) => `${item.label}: ${item.old} → ${item.new}`).join(' / ');
+  $('#workflow-edit-queue-summary').textContent = details || `${edit.result.validation.nodes?.length || 0}ノード · 変更なし`;
+  $('#workflow-edit-queue-dialog').showModal();
+}
+
+async function executeEditedWorkflow() {
+  const edit = state.workflowEdit;
+  if (!edit?.result?.validation?.can_queue || edit.dirty || state.isRunning) return;
+  state.isRunning = true;
+  const confirmButton = $('#workflow-edit-queue-confirm');
+  const queueButton = $('#workflow-edit-queue');
+  confirmButton.disabled = true;
+  queueButton.disabled = true;
+  const startedAt = performance.now();
+  try {
+    const queued = await api('/api/workflow/edit/queue', {
+      method: 'POST', body: JSON.stringify({ workflow_json: edit.originalRaw, patches: edit.patches }),
+    });
+    $('#workflow-edit-queue-dialog').close();
+    showMessage(`編集WorkflowをQueueへ登録しました · Seed ${queued.seed ?? '不明'}`, 'info');
+    const deadline = Date.now() + 15 * 60 * 1000;
+    let result;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      result = await api(`/api/workflow/status/${encodeURIComponent(queued.prompt_id)}`);
+      if (result.status === 'COMPLETED') break;
+      if (result.status === 'ERROR') throw new Error(result.message || 'ComfyUIで生成に失敗しました。');
+      showMessage(result.status === 'RUNNING' ? '編集Workflowで画像を生成中です…' : 'Queue待機中です…', 'info');
+    }
+    if (!result || result.status !== 'COMPLETED') throw new Error('画像生成がタイムアウトしました。ComfyUIの状態を確認してください。');
+    if (!result.images?.length) throw new Error('ComfyUIは処理を完了しましたが、SaveImage出力を取得できませんでした。');
+    $('#result-images').innerHTML = result.images.map((image) => `<a href="${image.url}" target="_blank" rel="noopener"><img src="${image.url}" alt="編集Workflowの生成画像"></a>`).join('');
+    $('#result-meta').textContent = `既存Workflow編集実行 · Seed ${queued.seed ?? '不明'} · ${((performance.now() - startedAt) / 1000).toFixed(1)}秒`;
+    $('#result').classList.remove('hidden');
+    showMessage('編集Workflowの生成が完了しました。', 'success');
+  } catch (error) { showMessage(error.message, 'error'); }
+  finally {
+    state.isRunning = false;
+    confirmButton.disabled = false;
+    if (edit.result) renderWorkflowEditValidation(edit.result.validation, edit.result.diff, edit.result.patch_count);
+  }
+}
+
 $('#workflow-analysis').addEventListener('click', (event) => {
+  if (event.target.closest('.analysis-edit-workflow')) { prepareWorkflowEditor(); return; }
+  if (event.target.closest('#workflow-edit-apply')) { applyWorkflowEditor(); return; }
+  if (event.target.closest('#workflow-edit-reset')) { resetWorkflowEditor(); return; }
+  if (event.target.closest('#workflow-edit-save')) { downloadEditedWorkflow(); return; }
+  if (event.target.closest('#workflow-edit-queue')) { openWorkflowEditQueueDialog(); return; }
+  const removeButton = event.target.closest('.workflow-edit-remove-lora');
+  if (removeButton) {
+    const nodeId = String(removeButton.dataset.nodeId);
+    state.workflowEdit?.removed.add(nodeId);
+    $('#workflow-editor .lora-edit-group')?.classList.add('removed');
+    document.querySelectorAll(`#workflow-editor [data-edit-node="${CSS.escape(nodeId)}"]`).forEach((input) => { input.disabled = true; });
+    removeButton.disabled = true;
+    removeButton.textContent = '削除対象に設定済み';
+    workflowEditorChanged();
+    return;
+  }
   if (event.target.closest('.analysis-download')) {
     if (!state.importedWorkflowFile) return;
     const url = URL.createObjectURL(state.importedWorkflowFile);
@@ -758,4 +1030,12 @@ $('#workflow-analysis').addEventListener('click', (event) => {
     loadDiagnostics();
   }
 });
+$('#workflow-analysis').addEventListener('input', (event) => {
+  if (event.target.closest('#workflow-editor [data-edit-key]')) workflowEditorChanged();
+});
+$('#workflow-analysis').addEventListener('change', (event) => {
+  if (event.target.closest('#workflow-editor [data-edit-key]')) workflowEditorChanged();
+});
+$('#workflow-edit-queue-cancel').addEventListener('click', () => $('#workflow-edit-queue-dialog').close());
+$('#workflow-edit-queue-confirm').addEventListener('click', () => executeEditedWorkflow());
 refresh();

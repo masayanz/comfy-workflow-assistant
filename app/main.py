@@ -19,6 +19,7 @@ from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field
 
 from app.schemas.workflow import WorkflowBuildRequest
+from app.schemas.workflow_editor import WorkflowEditPrepareRequest, WorkflowEditRequest
 from app.services.comfy_client import ComfyClient
 from app.services.model_scanner import custom_node_count, find_comfy_root
 from app.services.model_metadata import classify_asset, classify_compatibility
@@ -26,6 +27,7 @@ from app.services.model_profile_service import ModelProfileService
 from app.services.settings import get_settings, save_settings
 from app.services.workflow_analyzer import analyze_workflow_json
 from app.services.workflow_builder import build_definition, build_workflow, to_api_prompt, to_ui_workflow
+from app.services.workflow_editor import apply_workflow_patches, editable_manifest, ui_workflow_to_api_prompt
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = ROOT / "generated_workflows"
@@ -70,6 +72,10 @@ async def limit_upload_request_body(request, call_next):
         content_length = request.headers.get("content-length")
         if content_length and content_length.isdigit() and int(content_length) > MAX_WORKFLOW_IMPORT_BYTES + 65_536:
             return JSONResponse(status_code=413, content={"detail": "Workflow JSONは10MB以下にしてください。"})
+    if request.url.path.startswith("/api/workflow/edit/"):
+        content_length = request.headers.get("content-length")
+        if content_length and content_length.isdigit() and int(content_length) > MAX_WORKFLOW_IMPORT_BYTES * 2 + 256 * 1024:
+            return JSONResponse(status_code=413, content={"detail": "Workflowと編集内容の合計は10MB以下にしてください。"})
     return await call_next(request)
 
 
@@ -661,6 +667,113 @@ async def import_workflow(file: UploadFile = File(...)):
         return result
     finally:
         await file.close()
+
+
+async def _workflow_edit_catalog():
+    comfy = client()
+    status = await comfy.status()
+    if not status.get("online"):
+        return False, None, None
+    model_result, catalog_result = await asyncio.gather(
+        parent_model_inventory(), comfy.object_info_catalog(), return_exceptions=True,
+    )
+    inventory = None
+    node_catalog = None
+    if isinstance(model_result, Exception):
+        logger.warning("Workflow編集で親機モデル一覧を取得できません: %s", model_result)
+    else:
+        inventory = apply_model_overrides([dict(item) for item in model_result])
+    if isinstance(catalog_result, Exception):
+        logger.warning("Workflow編集で親機object_infoを取得できません: %s", catalog_result)
+    else:
+        node_catalog = catalog_result
+    return True, inventory, node_catalog
+
+
+def _workflow_from_edit_request(workflow_json: str) -> dict:
+    try:
+        workflow = json.loads(workflow_json)
+    except (json.JSONDecodeError, RecursionError) as exc:
+        raise HTTPException(status_code=400, detail="Workflow JSONを解析できません。") from exc
+    if not isinstance(workflow, dict):
+        raise HTTPException(status_code=400, detail="Workflow JSONのルートはオブジェクトである必要があります。")
+    return workflow
+
+
+@app.post("/api/workflow/edit/prepare")
+async def prepare_workflow_edit(payload: WorkflowEditPrepareRequest):
+    workflow = _workflow_from_edit_request(payload.workflow_json)
+    if not isinstance(workflow.get("nodes"), list) or not isinstance(workflow.get("links"), list):
+        return {"editable": False, "reason": "ComfyUI API Promptは解析可能ですが、この画面での部分編集には未対応です。",
+                "workflow_type": "comfyui_api_prompt", "fields": [], "unsupported_fields": []}
+    online, inventory, node_catalog = await _workflow_edit_catalog()
+    try:
+        manifest = editable_manifest(workflow, inventory=inventory, node_catalog=node_catalog)
+        initial = apply_workflow_patches(workflow, [], inventory=inventory, node_catalog=node_catalog)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    manifest["comfy_online"] = online
+    manifest["validation"] = initial["validation"]
+    return manifest
+
+
+@app.post("/api/workflow/edit/apply")
+async def apply_workflow_edit(payload: WorkflowEditRequest):
+    workflow = _workflow_from_edit_request(payload.workflow_json)
+    online, inventory, node_catalog = await _workflow_edit_catalog()
+    try:
+        result = apply_workflow_patches(
+            workflow, [patch.model_dump() for patch in payload.patches],
+            inventory=inventory, node_catalog=node_catalog,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409 if "編集開始時" in str(exc) or "読み直してください" in str(exc) else 400,
+                            detail=str(exc)) from exc
+    result["validation"]["comfy_online"] = online
+    result.pop("workflow", None)
+    return result
+
+
+@app.post("/api/workflow/edit/queue")
+async def queue_edited_workflow(payload: WorkflowEditRequest):
+    workflow = _workflow_from_edit_request(payload.workflow_json)
+    online, inventory, node_catalog = await _workflow_edit_catalog()
+    if not online:
+        raise HTTPException(status_code=503, detail="親機ComfyUIに接続できません。Queueへ送信していません。")
+    try:
+        edited = apply_workflow_patches(
+            workflow, [patch.model_dump() for patch in payload.patches],
+            inventory=inventory, node_catalog=node_catalog,
+        )
+        prompt = ui_workflow_to_api_prompt(edited["workflow"])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    validation = edited["validation"]
+    if not validation.get("can_queue"):
+        raise HTTPException(status_code=422, detail={
+            "message": "Workflowの検証で問題が見つかったため、Queueへ送信していません。",
+            "blockers": validation.get("blockers", []), "warnings": validation.get("warnings", []),
+        })
+    seed = next((node["inputs"].get("seed", node["inputs"].get("noise_seed"))
+                 for node in prompt.values() if node.get("class_type") in {"KSampler", "KSamplerAdvanced"}), None)
+    try:
+        prompt_id = await client().queue(prompt)
+    except httpx.HTTPStatusError as exc:
+        try:
+            body = exc.response.json()
+        except ValueError:
+            body = {}
+        logger.error("Edited ComfyUI workflow was rejected: HTTP %s response=%s node_errors=%s",
+                     exc.response.status_code, exc.response.text[:4000], body.get("node_errors") if isinstance(body, dict) else None)
+        raise HTTPException(status_code=502, detail="親ComfyUIが編集Workflowを受け付けませんでした。ComfyUIログを確認してください。") from exc
+    except Exception as exc:
+        logger.exception("Edited workflow could not be queued")
+        raise HTTPException(status_code=502, detail="親ComfyUIへ編集Workflowを送信できませんでした。接続状態を確認してください。") from exc
+    model_names = [item.get("name") for item in validation.get("models", [])]
+    logger.info("Edited workflow queued prompt_id=%s nodes=%d models=%s seed=%s patches=%d",
+                prompt_id, len(prompt), model_names, seed, len(edited["diff"]))
+    return {"prompt_id": prompt_id, "status": "QUEUED", "seed": str(seed) if seed is not None else None,
+            "diff": edited["diff"], "validation": validation}
 
 
 @app.post("/api/workflow/run")
